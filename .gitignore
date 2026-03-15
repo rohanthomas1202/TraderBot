@@ -37,6 +37,7 @@ natsdata/
 kalshi_credentials.json
 polymarket_credentials.json
 *.keystore
+ShadowMode.txt
 
 # Temporary / build
 tmp/

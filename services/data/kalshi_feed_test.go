@@ -88,11 +88,7 @@ func TestPollMarket_PublishesCorrectData(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := kalshi.NewClient(kalshi.Config{
-		BaseURL:   srv.URL,
-		KeyID:     "test",
-		KeySecret: "deadbeef01020304deadbeef01020304",
-	})
+	client := kalshi.NewTestClient(srv.URL)
 
 	// Connect to NATS for real publish verification
 	nc, err := nats.Connect("nats://localhost:4222")
@@ -167,11 +163,7 @@ func TestPollMarket_EmptyOrderbook_Skips(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := kalshi.NewClient(kalshi.Config{
-		BaseURL:   srv.URL,
-		KeyID:     "test",
-		KeySecret: "deadbeef01020304deadbeef01020304",
-	})
+	client := kalshi.NewTestClient(srv.URL)
 
 	nc, err := nats.Connect("nats://localhost:4222")
 	if err != nil {
@@ -205,11 +197,7 @@ func TestPollMarket_APIError_DoesNotCrash(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := kalshi.NewClient(kalshi.Config{
-		BaseURL:   srv.URL,
-		KeyID:     "test",
-		KeySecret: "deadbeef01020304deadbeef01020304",
-	})
+	client := kalshi.NewTestClient(srv.URL)
 
 	nc, err := nats.Connect("nats://localhost:4222")
 	if err != nil {
@@ -248,11 +236,7 @@ func TestRunKalshiFeed_Cancellation(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := kalshi.NewClient(kalshi.Config{
-		BaseURL:   srv.URL,
-		KeyID:     "test",
-		KeySecret: "deadbeef01020304deadbeef01020304",
-	})
+	client := kalshi.NewTestClient(srv.URL)
 
 	nc, err := nats.Connect("nats://localhost:4222")
 	if err != nil {

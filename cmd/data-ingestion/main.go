@@ -55,16 +55,22 @@ func main() {
 	case "mock":
 		go ingestion.RunMockFeed(ctx, time.Duration(intervalMs)*time.Millisecond)
 	case "kalshi":
-		kalshiCfg := kalshi.Config{
-			BaseURL:   envOrDefault("KALSHI_API_BASE_URL", "https://demo-api.kalshi.co/trade-api/v2"),
-			KeyID:     os.Getenv("KALSHI_API_KEY_ID"),
-			KeySecret: os.Getenv("KALSHI_API_KEY_SECRET"),
-		}
-		if kalshiCfg.KeyID == "" || kalshiCfg.KeySecret == "" {
-			logger.Error("KALSHI_API_KEY_ID and KALSHI_API_KEY_SECRET required for kalshi data source")
+		keyID := os.Getenv("KALSHI_API_KEY_ID")
+		keyPath := os.Getenv("KALSHI_PRIVATE_KEY_PATH")
+		if keyID == "" || keyPath == "" {
+			logger.Error("KALSHI_API_KEY_ID and KALSHI_PRIVATE_KEY_PATH required for kalshi data source")
 			os.Exit(1)
 		}
-		client := kalshi.NewClient(kalshiCfg)
+		kalshiCfg := kalshi.Config{
+			BaseURL:        envOrDefault("KALSHI_API_BASE_URL", "https://api.elections.kalshi.com/trade-api/v2"),
+			KeyID:          keyID,
+			PrivateKeyPath: keyPath,
+		}
+		client, err := kalshi.NewClient(kalshiCfg)
+		if err != nil {
+			logger.Error("failed to create kalshi client", "error", err)
+			os.Exit(1)
+		}
 		marketConfigPath := envOrDefault("KALSHI_MARKETS_CONFIG", "./configs/kalshi_markets.yaml")
 		go func() {
 			if err := ingestion.RunKalshiFeed(ctx, client, marketConfigPath); err != nil {

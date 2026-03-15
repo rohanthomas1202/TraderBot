@@ -2,10 +2,15 @@ package kalshi
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -72,32 +77,96 @@ func TestBestAsk(t *testing.T) {
 }
 
 func TestSignRequest(t *testing.T) {
-	c := &Client{
-		config: Config{
-			KeyID:     "test-key-id",
-			KeySecret: "deadbeef01020304deadbeef01020304",
-		},
+	c, err := newTestClientWithKey("https://api.example.com/trade-api/v2")
+	if err != nil {
+		t.Fatalf("create test client: %v", err)
 	}
 
 	req, _ := http.NewRequest(http.MethodGet, "https://api.example.com/trade-api/v2/markets", nil)
-	err := c.signRequest(req, "1700000000")
+	err = c.signRequest(req, "1700000000000")
 	if err != nil {
 		t.Fatalf("signRequest: %v", err)
 	}
 
-	if req.Header.Get("KALSHI-ACCESS-KEY") != "test-key-id" {
+	if req.Header.Get("KALSHI-ACCESS-KEY") != "test-key" {
 		t.Error("missing KALSHI-ACCESS-KEY header")
 	}
-	if req.Header.Get("KALSHI-ACCESS-TIMESTAMP") != "1700000000" {
+	if req.Header.Get("KALSHI-ACCESS-TIMESTAMP") != "1700000000000" {
 		t.Error("missing KALSHI-ACCESS-TIMESTAMP header")
 	}
 	sig := req.Header.Get("KALSHI-ACCESS-SIGNATURE")
 	if sig == "" {
 		t.Error("missing KALSHI-ACCESS-SIGNATURE header")
 	}
-	// Signature should be a hex string (64 chars for SHA256)
-	if len(sig) != 64 {
-		t.Errorf("signature length = %d, want 64", len(sig))
+	// Base64-encoded RSA signature should be non-empty
+	if len(sig) < 40 {
+		t.Errorf("signature seems too short: %d chars", len(sig))
+	}
+}
+
+func TestParseRSAPrivateKey_PKCS1(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pemData := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(key),
+	})
+
+	parsed, err := parseRSAPrivateKey(pemData)
+	if err != nil {
+		t.Fatalf("parse PKCS1: %v", err)
+	}
+	if parsed.N.Cmp(key.N) != 0 {
+		t.Error("parsed key does not match original")
+	}
+}
+
+func TestParseRSAPrivateKey_PKCS8(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkcs8Bytes, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pemData := pem.EncodeToMemory(&pem.Block{
+		Type:  "PRIVATE KEY",
+		Bytes: pkcs8Bytes,
+	})
+
+	parsed, err := parseRSAPrivateKey(pemData)
+	if err != nil {
+		t.Fatalf("parse PKCS8: %v", err)
+	}
+	if parsed.N.Cmp(key.N) != 0 {
+		t.Error("parsed key does not match original")
+	}
+}
+
+func TestNewClient_FromFile(t *testing.T) {
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	pemData := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(key),
+	})
+
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "kalshi.key")
+	os.WriteFile(keyPath, pemData, 0600)
+
+	c, err := NewClient(Config{
+		BaseURL:        "https://demo-api.kalshi.co/trade-api/v2",
+		KeyID:          "test",
+		PrivateKeyPath: keyPath,
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	if c.privateKey == nil {
+		t.Error("private key not loaded")
 	}
 }
 
@@ -117,11 +186,7 @@ func TestGetMarkets(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewClient(Config{
-		BaseURL:   srv.URL,
-		KeyID:     "test",
-		KeySecret: "deadbeef01020304deadbeef01020304",
-	})
+	c := NewTestClient(srv.URL)
 
 	resp, err := c.GetMarkets(context.Background(), "", 10)
 	if err != nil {
@@ -150,11 +215,7 @@ func TestGetOrderbook(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewClient(Config{
-		BaseURL:   srv.URL,
-		KeyID:     "test",
-		KeySecret: "deadbeef01020304deadbeef01020304",
-	})
+	c := NewTestClient(srv.URL)
 
 	ob, err := c.GetOrderbook(context.Background(), "KXBTC-T100K")
 	if err != nil {
@@ -182,11 +243,7 @@ func TestHTTPError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewClient(Config{
-		BaseURL:   srv.URL,
-		KeyID:     "test",
-		KeySecret: "deadbeef01020304deadbeef01020304",
-	})
+	c := NewTestClient(srv.URL)
 
 	_, err := c.GetMarkets(context.Background(), "", 10)
 	if err == nil {
@@ -202,11 +259,7 @@ func TestRateLimiter(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewClient(Config{
-		BaseURL:   srv.URL,
-		KeyID:     "test",
-		KeySecret: "deadbeef01020304deadbeef01020304",
-	})
+	c := NewTestClient(srv.URL)
 
 	start := time.Now()
 	for i := 0; i < 5; i++ {
@@ -215,7 +268,6 @@ func TestRateLimiter(t *testing.T) {
 	elapsed := time.Since(start)
 
 	// With 10 req/sec and burst=1, 5 requests should take at least ~400ms
-	// (first is immediate, then 4 * 100ms waits)
 	if elapsed < 350*time.Millisecond {
 		t.Errorf("5 requests completed in %v, expected >= 350ms (rate limiter not working)", elapsed)
 	}
@@ -226,21 +278,24 @@ func TestRateLimiter(t *testing.T) {
 
 func TestGetMarkets_Integration(t *testing.T) {
 	keyID := os.Getenv("KALSHI_API_KEY_ID")
-	keySecret := os.Getenv("KALSHI_API_KEY_SECRET")
-	if keyID == "" || keySecret == "" {
-		t.Skip("KALSHI_API_KEY_ID and KALSHI_API_KEY_SECRET not set, skipping integration test")
+	keyPath := os.Getenv("KALSHI_PRIVATE_KEY_PATH")
+	if keyID == "" || keyPath == "" {
+		t.Skip("KALSHI_API_KEY_ID and KALSHI_PRIVATE_KEY_PATH not set, skipping integration test")
 	}
 
 	baseURL := os.Getenv("KALSHI_API_BASE_URL")
 	if baseURL == "" {
-		baseURL = "https://demo-api.kalshi.co/trade-api/v2"
+		baseURL = "https://api.elections.kalshi.com/trade-api/v2"
 	}
 
-	c := NewClient(Config{
-		BaseURL:   baseURL,
-		KeyID:     keyID,
-		KeySecret: keySecret,
+	c, err := NewClient(Config{
+		BaseURL:        baseURL,
+		KeyID:          keyID,
+		PrivateKeyPath: keyPath,
 	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

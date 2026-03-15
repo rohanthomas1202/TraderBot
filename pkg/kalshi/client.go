@@ -2,15 +2,21 @@ package kalshi
 
 import (
 	"context"
-	"crypto/hmac"
+	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
-	"encoding/hex"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -18,9 +24,10 @@ import (
 
 // Config holds Kalshi API connection settings.
 type Config struct {
-	BaseURL   string // e.g. "https://demo-api.kalshi.co/trade-api/v2"
-	KeyID     string // KALSHI_API_KEY_ID
-	KeySecret string // KALSHI_API_KEY_SECRET (hex-encoded)
+	BaseURL        string // e.g. "https://demo-api.kalshi.co/trade-api/v2"
+	KeyID          string // KALSHI_API_KEY_ID
+	PrivateKeyPath string // path to PEM private key file
+	PrivateKeyPEM  string // or inline PEM string (used if PrivateKeyPath is empty)
 }
 
 // Client is a read-only Kalshi REST API client.
@@ -28,35 +35,89 @@ type Config struct {
 type Client struct {
 	httpClient *http.Client
 	config     Config
+	privateKey *rsa.PrivateKey
 	limiter    *rate.Limiter
 	logger     *slog.Logger
 }
 
 // NewClient creates a new Kalshi API client with rate limiting.
-func NewClient(cfg Config) *Client {
+// It parses the RSA private key from file or inline PEM.
+func NewClient(cfg Config) (*Client, error) {
+	var pemData []byte
+	var err error
+
+	if cfg.PrivateKeyPath != "" {
+		pemData, err = os.ReadFile(cfg.PrivateKeyPath)
+		if err != nil {
+			return nil, fmt.Errorf("read private key file %s: %w", cfg.PrivateKeyPath, err)
+		}
+	} else if cfg.PrivateKeyPEM != "" {
+		pemData = []byte(cfg.PrivateKeyPEM)
+	} else {
+		return nil, fmt.Errorf("either PrivateKeyPath or PrivateKeyPEM must be set")
+	}
+
+	privKey, err := parseRSAPrivateKey(pemData)
+	if err != nil {
+		return nil, fmt.Errorf("parse private key: %w", err)
+	}
+
 	return &Client{
 		httpClient: &http.Client{Timeout: 10 * time.Second},
 		config:     cfg,
+		privateKey: privKey,
 		limiter:    rate.NewLimiter(10, 1), // 10 req/sec, burst 1
 		logger:     slog.Default().With("component", "kalshi-client"),
+	}, nil
+}
+
+// parseRSAPrivateKey parses an RSA private key from PEM data.
+// Supports both PKCS#1 (RSA PRIVATE KEY) and PKCS#8 (PRIVATE KEY) formats.
+func parseRSAPrivateKey(pemData []byte) (*rsa.PrivateKey, error) {
+	block, _ := pem.Decode(pemData)
+	if block == nil {
+		return nil, fmt.Errorf("no PEM block found in key data")
+	}
+
+	switch block.Type {
+	case "RSA PRIVATE KEY":
+		return x509.ParsePKCS1PrivateKey(block.Bytes)
+	case "PRIVATE KEY":
+		key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+		if err != nil {
+			return nil, err
+		}
+		rsaKey, ok := key.(*rsa.PrivateKey)
+		if !ok {
+			return nil, fmt.Errorf("PKCS#8 key is not RSA")
+		}
+		return rsaKey, nil
+	default:
+		return nil, fmt.Errorf("unsupported PEM block type: %s", block.Type)
 	}
 }
 
 // signRequest adds Kalshi authentication headers to the request.
-// Signature = HMAC-SHA256(timestamp + method + path) using the key secret.
-func (c *Client) signRequest(req *http.Request, timestamp string) error {
-	message := timestamp + req.Method + req.URL.Path
-	secret, err := hex.DecodeString(c.config.KeySecret)
-	if err != nil {
-		return fmt.Errorf("decode key secret: %w", err)
+// Signature = RSA-PSS-SHA256 sign(timestamp + method + path), base64-encoded.
+// If no private key is configured (test client), headers are skipped.
+func (c *Client) signRequest(req *http.Request, timestampMs string) error {
+	if c.privateKey == nil {
+		return nil // test client, no signing needed
 	}
-	mac := hmac.New(sha256.New, secret)
-	mac.Write([]byte(message))
-	signature := hex.EncodeToString(mac.Sum(nil))
+
+	message := timestampMs + req.Method + req.URL.Path
+	hash := sha256.Sum256([]byte(message))
+
+	signature, err := rsa.SignPSS(rand.Reader, c.privateKey, crypto.SHA256, hash[:], &rsa.PSSOptions{
+		SaltLength: rsa.PSSSaltLengthEqualsHash,
+	})
+	if err != nil {
+		return fmt.Errorf("sign request: %w", err)
+	}
 
 	req.Header.Set("KALSHI-ACCESS-KEY", c.config.KeyID)
-	req.Header.Set("KALSHI-ACCESS-TIMESTAMP", timestamp)
-	req.Header.Set("KALSHI-ACCESS-SIGNATURE", signature)
+	req.Header.Set("KALSHI-ACCESS-TIMESTAMP", timestampMs)
+	req.Header.Set("KALSHI-ACCESS-SIGNATURE", base64.StdEncoding.EncodeToString(signature))
 	return nil
 }
 
@@ -72,11 +133,12 @@ func (c *Client) doGet(ctx context.Context, path string, result interface{}) err
 		return fmt.Errorf("create request: %w", err)
 	}
 
-	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
-	if err := c.signRequest(req, timestamp); err != nil {
+	timestampMs := strconv.FormatInt(time.Now().UnixMilli(), 10)
+	if err := c.signRequest(req, timestampMs); err != nil {
 		return fmt.Errorf("sign request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -101,21 +163,21 @@ func (c *Client) doGet(ctx context.Context, path string, result interface{}) err
 
 // Market represents a Kalshi market.
 type Market struct {
-	Ticker          string `json:"ticker"`
-	Title           string `json:"title"`
-	Subtitle        string `json:"subtitle"`
-	Status          string `json:"status"` // "open", "closed", "settled"
-	YesBid          int    `json:"yes_bid"`
-	YesAsk          int    `json:"yes_ask"`
-	NoBid           int    `json:"no_bid"`
-	NoAsk           int    `json:"no_ask"`
-	LastPrice       int    `json:"last_price"`
-	Volume          int    `json:"volume"`
-	Volume24h       int    `json:"volume_24h"`
-	OpenInterest    int    `json:"open_interest"`
-	PreviousYesBid  int    `json:"previous_yes_bid"`
-	PreviousYesAsk  int    `json:"previous_yes_ask"`
-	PreviousPrice   int    `json:"previous_price"`
+	Ticker         string `json:"ticker"`
+	Title          string `json:"title"`
+	Subtitle       string `json:"subtitle"`
+	Status         string `json:"status"` // "open", "closed", "settled"
+	YesBid         int    `json:"yes_bid"`
+	YesAsk         int    `json:"yes_ask"`
+	NoBid          int    `json:"no_bid"`
+	NoAsk          int    `json:"no_ask"`
+	LastPrice      int    `json:"last_price"`
+	Volume         int    `json:"volume"`
+	Volume24h      int    `json:"volume_24h"`
+	OpenInterest   int    `json:"open_interest"`
+	PreviousYesBid int    `json:"previous_yes_bid"`
+	PreviousYesAsk int    `json:"previous_yes_ask"`
+	PreviousPrice  int    `json:"previous_price"`
 }
 
 // Orderbook represents a Kalshi market orderbook.
@@ -223,4 +285,35 @@ func BestAsk(levels [][]int) (priceCents int, depth int32) {
 // 65 cents = $0.65 = 650,000 micros.
 func CentsToMicros(cents int) int64 {
 	return int64(cents) * 10_000
+}
+
+// NewTestClient creates a client for testing with a custom HTTP client.
+// It bypasses RSA key loading by accepting a pre-built http.Client.
+func NewTestClient(baseURL string) *Client {
+	return &Client{
+		httpClient: &http.Client{Timeout: 10 * time.Second},
+		config:     Config{BaseURL: baseURL},
+		limiter:    rate.NewLimiter(10, 1),
+		logger:     slog.Default().With("component", "kalshi-client-test"),
+	}
+}
+
+// newTestClientWithKey creates a client for testing with a generated RSA key.
+func newTestClientWithKey(baseURL string) (*Client, error) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, err
+	}
+	return &Client{
+		httpClient: &http.Client{Timeout: 10 * time.Second},
+		config:     Config{BaseURL: baseURL, KeyID: "test-key"},
+		privateKey: key,
+		limiter:    rate.NewLimiter(10, 1),
+		logger:     slog.Default().With("component", "kalshi-client-test"),
+	}, nil
+}
+
+// SetBaseURL is a helper for overriding the base URL (used in tests with httptest).
+func (c *Client) SetBaseURL(url string) {
+	c.config.BaseURL = strings.TrimRight(url, "/")
 }

@@ -2,11 +2,13 @@ package risk
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"autonomy-platform/gen/commonpb"
-	"autonomy-platform/internal/convert"
 	"autonomy-platform/gen/riskpb"
+	"autonomy-platform/internal/convert"
+	"autonomy-platform/internal/logging"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -28,11 +30,19 @@ func (s *GRPCServer) EvaluateOrder(ctx context.Context, req *riskpb.EvaluateOrde
 		return nil, status.Error(codes.InvalidArgument, "order is required")
 	}
 
+	if tid := req.GetOrder().GetTraceId(); tid != "" {
+		ctx = logging.WithTraceID(ctx, tid)
+	}
+	logger := logging.LoggerWithTrace(ctx, slog.Default())
+
 	order := convert.ProposedOrderFromProto(req.GetOrder())
 	approval, err := s.engine.EvaluateOrder(ctx, order)
 	if err != nil {
+		logger.Error("order evaluation failed", "error", err)
 		return nil, status.Errorf(codes.Internal, "evaluate order: %v", err)
 	}
+
+	logger.Info("order evaluated", "decision", approval.Decision, "strategy", order.StrategyID)
 
 	return &riskpb.EvaluateOrderResponse{
 		Approval: approvalToProto(approval),
@@ -45,8 +55,14 @@ func (s *GRPCServer) GetRiskState(ctx context.Context, req *riskpb.GetRiskStateR
 }
 
 func (s *GRPCServer) ReportFill(ctx context.Context, req *riskpb.ReportFillRequest) (*riskpb.ReportFillResponse, error) {
+	if tid := req.GetTraceId(); tid != "" {
+		ctx = logging.WithTraceID(ctx, tid)
+	}
+	logger := logging.LoggerWithTrace(ctx, slog.Default())
+
 	fill := fillReportFromProto(req)
 	if err := s.engine.ReportFill(ctx, fill); err != nil {
+		logger.Error("fill report failed", "error", err)
 		return nil, status.Errorf(codes.Internal, "report fill: %v", err)
 	}
 	return &riskpb.ReportFillResponse{Acknowledged: true}, nil

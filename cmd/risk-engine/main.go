@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
 	"net"
 	"os"
 	"os/signal"
@@ -15,6 +14,8 @@ import (
 	"autonomy-platform/internal/config"
 	"autonomy-platform/internal/events"
 	"autonomy-platform/internal/grpcauth"
+	"autonomy-platform/internal/health"
+	"autonomy-platform/internal/logging"
 	"autonomy-platform/internal/models"
 	"autonomy-platform/services/risk"
 
@@ -24,8 +25,7 @@ import (
 )
 
 func main() {
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	logger := slog.Default().With("service", "risk-engine")
+	logger := logging.SetupLogger("risk-engine")
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -72,6 +72,12 @@ func main() {
 		logger.Error("failed to load risk state", "error", err)
 		os.Exit(1)
 	}
+
+	// Start health endpoint
+	healthPort := envOrDefault("HEALTH_PORT", "50021")
+	health.New(healthPort, "risk-engine", func() error {
+		return dbPool.Ping(ctx)
+	}).Start()
 
 	// Subscribe to market data events to update freshness cache
 	subscriber, err := events.NewSubscriber(nc)

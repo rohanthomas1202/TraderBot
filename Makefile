@@ -1,4 +1,4 @@
-.PHONY: all build test dev up down migrate status kill ack resume orders risk proto
+.PHONY: all build test dev up down migrate status kill ack resume orders risk proto audit trace config ledger
 
 # ─── Protobuf ───
 
@@ -91,6 +91,19 @@ limits:
 
 policy:
 	go run ./cmd/trade-ctl policy
+
+audit:
+	go run ./cmd/trade-ctl audit
+
+trace:
+	@echo "Usage: make trace TRACE_ID=<uuid>"
+	go run ./cmd/trade-ctl trace $(TRACE_ID)
+
+config:
+	go run ./cmd/trade-ctl config
+
+ledger:
+	go run ./cmd/trade-ctl ledger
 
 # ─── Simulation ───
 

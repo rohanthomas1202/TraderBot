@@ -19,7 +19,9 @@ import (
 	"autonomy-platform/internal/convert"
 	"autonomy-platform/internal/events"
 	"autonomy-platform/internal/grpcauth"
+	"autonomy-platform/internal/health"
 	"autonomy-platform/internal/ledger"
+	"autonomy-platform/internal/logging"
 	"autonomy-platform/services/execution"
 	"autonomy-platform/services/mockexchange"
 	"autonomy-platform/services/recon"
@@ -32,8 +34,7 @@ import (
 )
 
 func main() {
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	logger := slog.Default().With("service", "execution-engine")
+	logger := logging.SetupLogger("execution-engine")
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -115,6 +116,12 @@ func main() {
 		engine.SetReconciled(true)
 		logger.Warn("startup reconciliation found mismatches — proceeding in paper mode")
 	}
+
+	// Start health endpoint
+	healthPort := envOrDefault("HEALTH_PORT", "50041")
+	health.New(healthPort, "execution-engine", func() error {
+		return dbPool.Ping(ctx)
+	}).Start()
 
 	// Connect to risk engine for fill reporting
 	riskAddr := envOrDefault("RISK_ENGINE_ADDR", "localhost:50020")

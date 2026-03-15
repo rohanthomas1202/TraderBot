@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"log/slog"
 	"os"
 	"os/signal"
 	"strconv"
@@ -10,14 +9,15 @@ import (
 	"time"
 
 	"autonomy-platform/internal/events"
+	"autonomy-platform/internal/health"
+	"autonomy-platform/internal/logging"
 	"autonomy-platform/services/data"
 
 	"github.com/nats-io/nats.go"
 )
 
 func main() {
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	logger := slog.Default().With("service", "data-ingestion")
+	logger := logging.SetupLogger("data-ingestion")
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -35,6 +35,10 @@ func main() {
 		logger.Error("failed to create event publisher", "error", err)
 		os.Exit(1)
 	}
+
+	// Start health endpoint
+	healthPort := envOrDefault("HEALTH_PORT", "50011")
+	health.New(healthPort, "data-ingestion").Start()
 
 	ingestion := data.NewIngestion(publisher)
 

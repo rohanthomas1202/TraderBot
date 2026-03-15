@@ -3,12 +3,14 @@ package execution
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"autonomy-platform/gen/commonpb"
-	"autonomy-platform/internal/convert"
 	"autonomy-platform/gen/executionpb"
 	"autonomy-platform/gen/riskpb"
+	"autonomy-platform/internal/convert"
+	"autonomy-platform/internal/logging"
 	"autonomy-platform/internal/models"
 	"autonomy-platform/services/risk"
 
@@ -34,11 +36,19 @@ func (s *GRPCServer) SubmitOrder(ctx context.Context, req *executionpb.SubmitOrd
 		return nil, status.Error(codes.InvalidArgument, "signed approval is required")
 	}
 
+	if tid := req.GetApproval().GetTraceId(); tid != "" {
+		ctx = logging.WithTraceID(ctx, tid)
+	}
+	logger := logging.LoggerWithTrace(ctx, slog.Default())
+
 	approval := approvalFromProto(req.GetApproval())
 	rec, err := s.engine.SubmitOrder(ctx, approval)
 	if err != nil {
+		logger.Error("order submission failed", "error", err)
 		return nil, status.Errorf(codes.Internal, "submit order: %v", err)
 	}
+
+	logger.Info("order submitted", "internal_order_id", rec.InternalOrderID, "status", rec.Status)
 
 	return &executionpb.SubmitOrderResponse{
 		Order: convert.OrderRecordToProto(rec),

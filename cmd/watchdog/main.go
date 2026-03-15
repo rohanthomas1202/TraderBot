@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"log/slog"
 	"net"
 	"os"
 	"os/signal"
@@ -15,6 +14,8 @@ import (
 	"autonomy-platform/internal/audit"
 	"autonomy-platform/internal/events"
 	"autonomy-platform/internal/grpcauth"
+	"autonomy-platform/internal/health"
+	"autonomy-platform/internal/logging"
 	"autonomy-platform/services/watchdog"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -24,8 +25,7 @@ import (
 )
 
 func main() {
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	logger := slog.Default().With("service", "watchdog")
+	logger := logging.SetupLogger("watchdog")
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -78,6 +78,12 @@ func main() {
 		logger.Error("failed to load active halts", "error", err)
 		os.Exit(1)
 	}
+
+	// Start health endpoint
+	healthPort := envOrDefault("HEALTH_PORT", "50056")
+	health.New(healthPort, "watchdog", func() error {
+		return dbPool.Ping(ctx)
+	}).Start()
 
 	// Create dead man's switch
 	heartbeatSec := envOrDefaultInt("HEARTBEAT_INTERVAL_SEC", 10)

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
 	"os"
 	"os/signal"
 	"strconv"
@@ -15,6 +14,8 @@ import (
 	"autonomy-platform/gen/riskpb"
 	"autonomy-platform/internal/events"
 	"autonomy-platform/internal/grpcauth"
+	"autonomy-platform/internal/health"
+	"autonomy-platform/internal/logging"
 	"autonomy-platform/internal/models"
 	"autonomy-platform/services/strategy"
 
@@ -24,8 +25,7 @@ import (
 )
 
 func main() {
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	logger := slog.Default().With("service", "strategy-engine")
+	logger := logging.SetupLogger("strategy-engine")
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -75,6 +75,10 @@ func main() {
 		logger.Error("failed to subscribe to market data", "error", err)
 		os.Exit(1)
 	}
+
+	// Start health endpoint
+	healthPort := envOrDefault("HEALTH_PORT", "50031")
+	health.New(healthPort, "strategy-engine").Start()
 
 	// Connect to risk engine via gRPC
 	riskAddr := envOrDefault("RISK_ENGINE_ADDR", "localhost:50020")

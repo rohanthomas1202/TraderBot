@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"autonomy-platform/internal/audit"
+
+	"github.com/google/uuid"
 )
 
 // TestAuditLog_HashChainIntegrity verifies that audit log entries are
@@ -15,7 +17,9 @@ func TestAuditLog_HashChainIntegrity(t *testing.T) {
 	db, _, _ := setupTestEnv(t)
 	ctx := context.Background()
 
-	logger := audit.NewLogger("test-audit", db)
+	// Use unique service name to isolate from prior test runs
+	svcName := "test-audit-" + uuid.New().String()[:8]
+	logger := audit.NewLogger(svcName, db)
 
 	// Write several audit entries
 	entries := []struct {
@@ -23,9 +27,9 @@ func TestAuditLog_HashChainIntegrity(t *testing.T) {
 		traceID   string
 		payload   interface{}
 	}{
-		{"test.event.first", "trace-001", map[string]string{"action": "first entry"}},
-		{"test.event.second", "trace-002", map[string]string{"action": "second entry"}},
-		{"test.event.third", "trace-003", map[string]string{"action": "third entry"}},
+		{"test.event.first", uuid.New().String(), map[string]string{"action": "first entry"}},
+		{"test.event.second", uuid.New().String(), map[string]string{"action": "second entry"}},
+		{"test.event.third", uuid.New().String(), map[string]string{"action": "third entry"}},
 	}
 
 	for _, e := range entries {
@@ -39,8 +43,8 @@ func TestAuditLog_HashChainIntegrity(t *testing.T) {
 	rows, err := db.Query(ctx,
 		`SELECT entry_hash, previous_hash, event_type
 		 FROM audit.event_log
-		 WHERE service = 'test-audit'
-		 ORDER BY timestamp ASC`)
+		 WHERE service = $1
+		 ORDER BY timestamp ASC`, svcName)
 	if err != nil {
 		t.Fatalf("query audit log: %v", err)
 	}
@@ -87,10 +91,11 @@ func TestAuditLog_CriticalEventsLogged(t *testing.T) {
 	db, _, _ := setupTestEnv(t)
 	ctx := context.Background()
 
-	logger := audit.NewLogger("test-critical", db)
+	critSvcName := "test-critical-" + uuid.New().String()[:8]
+	logger := audit.NewLogger(critSvcName, db)
 
 	// Log a critical event
-	logger.LogCritical(ctx, "kill_switch.activated", "trace-critical", map[string]string{
+	logger.LogCritical(ctx, "kill_switch.activated", uuid.New().String(), map[string]string{
 		"level":  "cancel_only",
 		"scope":  "global",
 		"reason": "test",
@@ -100,8 +105,8 @@ func TestAuditLog_CriticalEventsLogged(t *testing.T) {
 	var severity string
 	err := db.QueryRow(ctx,
 		`SELECT severity FROM audit.event_log
-		 WHERE service = 'test-critical' AND event_type = 'kill_switch.activated'
-		 LIMIT 1`).Scan(&severity)
+		 WHERE service = $1 AND event_type = 'kill_switch.activated'
+		 LIMIT 1`, critSvcName).Scan(&severity)
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}

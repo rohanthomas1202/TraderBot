@@ -10,6 +10,8 @@ import (
 	"autonomy-platform/internal/audit"
 	"autonomy-platform/internal/models"
 	"autonomy-platform/services/risk"
+
+	"github.com/google/uuid"
 )
 
 // TestDeniedOrder_ExceedsNotionalLimit verifies that orders exceeding
@@ -37,8 +39,9 @@ func TestDeniedOrder_ExceedsNotionalLimit(t *testing.T) {
 	})
 
 	// Create order that exceeds per-trade notional limit ($10,000 in paper.yaml)
+	traceID := uuid.New().String()
 	order := &models.ProposedOrder{
-		TraceID:        "test-denied-001",
+		TraceID:        traceID,
 		StrategyID:     "test-strategy",
 		Venue:          "mock",
 		MarketID:       "MOCK-HUGE-ORDER",
@@ -100,7 +103,7 @@ func TestDeniedOrder_MarketNotAllowed(t *testing.T) {
 	})
 
 	order := &models.ProposedOrder{
-		TraceID:        "test-denied-market-001",
+		TraceID:        uuid.New().String(),
 		StrategyID:     "test-strategy",
 		Venue:          "unknown-venue", // not in policy allowed_markets
 		MarketID:       "UNKNOWN-MARKET",
@@ -153,7 +156,7 @@ func TestDeniedOrder_StaleData(t *testing.T) {
 	})
 
 	order := &models.ProposedOrder{
-		TraceID:        "test-stale-001",
+		TraceID:        uuid.New().String(),
 		StrategyID:     "test-strategy",
 		Venue:          "mock",
 		MarketID:       "MOCK-STALE-TEST",

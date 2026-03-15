@@ -11,6 +11,8 @@ import (
 	"autonomy-platform/internal/models"
 	"autonomy-platform/services/execution"
 	"autonomy-platform/services/risk"
+
+	"github.com/google/uuid"
 )
 
 // TestRecovery_OpenOrdersSurviveRestart verifies that the execution engine
@@ -22,18 +24,22 @@ func TestRecovery_OpenOrdersSurviveRestart(t *testing.T) {
 	hmacKey := []byte("test-hmac-key")
 	auditor := audit.NewLogger("test", db)
 
+	// Use unique market ID to avoid cross-test state contamination
+	marketID := "MOCK-RECOVERY-" + uuid.New().String()[:8]
+
 	// Create and submit an order
 	riskEngine := risk.NewEngine(db, pub, auditor, policy, hmacKey)
 	riskEngine.LoadState(ctx)
 	riskEngine.UpdateMarketData(&models.MarketData{
-		Venue: "mock", MarketID: "MOCK-RECOVERY-TEST",
+		Venue: "mock", MarketID: marketID,
 		BidPriceMicros: 400_000, AskPriceMicros: 410_000,
 		BidDepth: 5, AskDepth: 5, UpdatedAt: time.Now(),
 	})
 
+	traceID := uuid.New().String()
 	order := &models.ProposedOrder{
-		TraceID: "recovery-trace-001", StrategyID: "test",
-		Venue: "mock", MarketID: "MOCK-RECOVERY-TEST",
+		TraceID: traceID, StrategyID: "test",
+		Venue: "mock", MarketID: marketID,
 		Side: models.SideBuy, Quantity: 5,
 		PriceMicros: 400_000, NotionalMicros: 2_000_000,
 		ProposedAt: time.Now(),
@@ -42,6 +48,14 @@ func TestRecovery_OpenOrdersSurviveRestart(t *testing.T) {
 	approval, err := riskEngine.EvaluateOrder(ctx, order)
 	if err != nil {
 		t.Fatalf("evaluate: %v", err)
+	}
+	if approval.Decision != risk.DecisionApproved {
+		for _, c := range approval.Checks {
+			if !c.Passed {
+				t.Logf("  check failed: %s — %s", c.Name, c.Detail)
+			}
+		}
+		t.Fatalf("expected approval, got %s", approval.Decision)
 	}
 
 	// Use a mock adapter that does NOT auto-fill (so order stays open)

@@ -10,6 +10,8 @@ import (
 	"autonomy-platform/internal/audit"
 	"autonomy-platform/internal/models"
 	"autonomy-platform/services/risk"
+
+	"github.com/google/uuid"
 )
 
 // TestDuplicateOrder_SecondProposalDenied verifies that submitting the same
@@ -31,9 +33,9 @@ func TestDuplicateOrder_SecondProposalDenied(t *testing.T) {
 		UpdatedAt: time.Now(),
 	})
 
-	makeOrder := func(traceID string) *models.ProposedOrder {
+	makeOrder := func() *models.ProposedOrder {
 		return &models.ProposedOrder{
-			TraceID:        traceID,
+			TraceID:        uuid.New().String(),
 			StrategyID:     "test-strategy",
 			Venue:          "mock",
 			MarketID:       "MOCK-DEDUP-TEST",
@@ -46,7 +48,7 @@ func TestDuplicateOrder_SecondProposalDenied(t *testing.T) {
 	}
 
 	// First order should be approved
-	approval1, err := riskEngine.EvaluateOrder(ctx, makeOrder("dedup-trace-001"))
+	approval1, err := riskEngine.EvaluateOrder(ctx, makeOrder())
 	if err != nil {
 		t.Fatalf("first evaluate: %v", err)
 	}
@@ -56,7 +58,7 @@ func TestDuplicateOrder_SecondProposalDenied(t *testing.T) {
 
 	// Second identical order (different trace_id but same idempotency key)
 	// should be denied by duplicate_order check
-	approval2, err := riskEngine.EvaluateOrder(ctx, makeOrder("dedup-trace-002"))
+	approval2, err := riskEngine.EvaluateOrder(ctx, makeOrder())
 	if err != nil {
 		t.Fatalf("second evaluate: %v", err)
 	}

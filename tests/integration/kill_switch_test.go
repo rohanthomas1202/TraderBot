@@ -8,11 +8,12 @@ import (
 	"time"
 
 	"autonomy-platform/internal/audit"
-	"autonomy-platform/internal/events"
 	"autonomy-platform/internal/models"
 	"autonomy-platform/services/execution"
 	"autonomy-platform/services/risk"
 	"autonomy-platform/services/watchdog"
+
+	"github.com/google/uuid"
 )
 
 // TestKillSwitch_BlocksNewOrders verifies that after a kill switch is triggered,
@@ -55,7 +56,7 @@ func TestKillSwitch_BlocksNewOrders(t *testing.T) {
 	// The risk engine should deny because system mode is not normal.
 	// But even if we forge an approval, the execution engine should reject.
 	order := &models.ProposedOrder{
-		TraceID: "test-kill-001", StrategyID: "test",
+		TraceID: uuid.New().String(), StrategyID: "test",
 		Venue: "mock", MarketID: "MOCK-KILL-TEST",
 		Side: models.SideBuy, Quantity: 1,
 		PriceMicros: 400_000, NotionalMicros: 400_000,

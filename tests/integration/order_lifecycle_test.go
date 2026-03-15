@@ -14,6 +14,7 @@ import (
 	"autonomy-platform/services/execution"
 	"autonomy-platform/services/risk"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
 )
@@ -71,10 +72,14 @@ func TestOrderLifecycle_ProposalToFill(t *testing.T) {
 		t.Fatalf("load risk state: %v", err)
 	}
 
+	// Use unique IDs to isolate from prior test runs
+	marketID := "MOCK-BTC-" + uuid.New().String()[:8]
+	strategyID := "test-strategy-" + uuid.New().String()[:8]
+
 	// Inject mock market data so freshness check passes
 	riskEngine.UpdateMarketData(&models.MarketData{
 		Venue:           "mock",
-		MarketID:        "MOCK-BTC-100K",
+		MarketID:        marketID,
 		BidPriceMicros:  350_000,
 		AskPriceMicros:  360_000,
 		LastPriceMicros: 355_000,
@@ -85,14 +90,14 @@ func TestOrderLifecycle_ProposalToFill(t *testing.T) {
 
 	// Create proposed order
 	order := &models.ProposedOrder{
-		TraceID:        "test-trace-001",
-		StrategyID:     "test-strategy",
+		TraceID:        uuid.New().String(),
+		StrategyID:     strategyID,
 		Venue:          "mock",
-		MarketID:       "MOCK-BTC-100K",
+		MarketID:       marketID,
 		Side:           models.SideBuy,
-		Quantity:       10,
+		Quantity:       1,
 		PriceMicros:    355_000,
-		NotionalMicros: 3_550_000,
+		NotionalMicros: 355_000,
 		ProposedAt:     time.Now(),
 	}
 
@@ -102,13 +107,12 @@ func TestOrderLifecycle_ProposalToFill(t *testing.T) {
 		t.Fatalf("evaluate order: %v", err)
 	}
 	if approval.Decision != risk.DecisionApproved {
-		t.Fatalf("expected approved, got %s. Failed checks:", approval.Decision)
 		for _, c := range approval.Checks {
 			if !c.Passed {
 				t.Logf("  FAIL: %s — %s", c.Name, c.Detail)
 			}
 		}
-		t.FailNow()
+		t.Fatalf("expected approved, got %s", approval.Decision)
 	}
 
 	// Create execution engine with mock adapter

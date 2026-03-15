@@ -140,14 +140,16 @@ func (k *KillSwitchManager) Trigger(ctx context.Context, level KillSwitchLevel, 
 	k.mu.Unlock()
 
 	// Persist to DB first
-	_, err := k.db.Exec(ctx,
-		`INSERT INTO watchdog.kill_switch_events (level, scope, reason, triggered_by, triggered_at)
-		 VALUES ($1, $2, $3, $4, $5)`,
-		string(level), scope, reason, triggeredBy, halt.TriggeredAt,
-	)
-	if err != nil {
-		k.logger.Error("failed to persist kill switch event", "error", err)
-		// Continue anyway — the in-memory state is already updated
+	if k.db != nil {
+		_, err := k.db.Exec(ctx,
+			`INSERT INTO watchdog.kill_switch_events (level, scope, reason, triggered_by, triggered_at)
+			 VALUES ($1, $2, $3, $4, $5)`,
+			string(level), scope, reason, triggeredBy, halt.TriggeredAt,
+		)
+		if err != nil {
+			k.logger.Error("failed to persist kill switch event", "error", err)
+			// Continue anyway — the in-memory state is already updated
+		}
 	}
 
 	// Execute kill switch actions
@@ -174,21 +176,25 @@ func (k *KillSwitchManager) Trigger(ctx context.Context, level KillSwitchLevel, 
 	}
 
 	// Publish event
-	k.publisher.Publish(events.SubjectKillActivated+"."+scope, events.KillSwitchEvent{
+	if k.publisher != nil {
+		k.publisher.Publish(events.SubjectKillActivated+"."+scope, events.KillSwitchEvent{
 		Level:       string(level),
 		Scope:       scope,
 		Reason:      reason,
 		TriggeredBy: triggeredBy,
 		Timestamp:   halt.TriggeredAt,
-	})
+		})
+	}
 
 	// Audit log
-	k.auditor.LogCritical(ctx, "kill_switch.activated", "", map[string]interface{}{
+	if k.auditor != nil {
+		k.auditor.LogCritical(ctx, "kill_switch.activated", "", map[string]interface{}{
 		"level":        string(level),
 		"scope":        scope,
 		"reason":       reason,
 		"triggered_by": triggeredBy,
-	})
+		})
+	}
 
 	k.logger.Warn("KILL SWITCH ACTIVATED",
 		"level", level,
@@ -220,21 +226,25 @@ func (k *KillSwitchManager) Acknowledge(ctx context.Context, scope, ackedBy, roo
 	halt.RootCause = rootCause
 	k.mu.Unlock()
 
-	_, err := k.db.Exec(ctx,
-		`UPDATE watchdog.kill_switch_events
-		 SET acknowledged = TRUE, acknowledged_by = $1, acknowledged_at = $2, root_cause = $3
-		 WHERE scope = $4 AND resumed = FALSE AND acknowledged = FALSE`,
-		ackedBy, now, rootCause, scope,
-	)
-	if err != nil {
-		k.logger.Error("failed to persist acknowledgment", "error", err)
+	if k.db != nil {
+		_, err := k.db.Exec(ctx,
+			`UPDATE watchdog.kill_switch_events
+			 SET acknowledged = TRUE, acknowledged_by = $1, acknowledged_at = $2, root_cause = $3
+			 WHERE scope = $4 AND resumed = FALSE AND acknowledged = FALSE`,
+			ackedBy, now, rootCause, scope,
+		)
+		if err != nil {
+			k.logger.Error("failed to persist acknowledgment", "error", err)
+		}
 	}
 
-	k.auditor.LogInfo(ctx, "kill_switch.acknowledged", "", map[string]interface{}{
-		"scope":      scope,
-		"acked_by":   ackedBy,
-		"root_cause": rootCause,
-	})
+	if k.auditor != nil {
+		k.auditor.LogInfo(ctx, "kill_switch.acknowledged", "", map[string]interface{}{
+			"scope":      scope,
+			"acked_by":   ackedBy,
+			"root_cause": rootCause,
+		})
+	}
 
 	return nil
 }
@@ -257,14 +267,16 @@ func (k *KillSwitchManager) Resume(ctx context.Context, scope, resumedBy string)
 	mode := k.currentMode
 	k.mu.Unlock()
 
-	_, err := k.db.Exec(ctx,
-		`UPDATE watchdog.kill_switch_events
-		 SET resumed = TRUE, resumed_by = $1, resumed_at = $2
-		 WHERE scope = $3 AND resumed = FALSE`,
-		resumedBy, time.Now().UTC(), scope,
-	)
-	if err != nil {
-		k.logger.Error("failed to persist resume", "error", err)
+	if k.db != nil {
+		_, err := k.db.Exec(ctx,
+			`UPDATE watchdog.kill_switch_events
+			 SET resumed = TRUE, resumed_by = $1, resumed_at = $2
+			 WHERE scope = $3 AND resumed = FALSE`,
+			resumedBy, time.Now().UTC(), scope,
+		)
+		if err != nil {
+			k.logger.Error("failed to persist resume", "error", err)
+		}
 	}
 
 	// Update service modes
@@ -275,11 +287,13 @@ func (k *KillSwitchManager) Resume(ctx context.Context, scope, resumedBy string)
 		k.risk.SetSystemMode(mode)
 	}
 
-	k.auditor.LogInfo(ctx, "kill_switch.resumed", "", map[string]interface{}{
-		"scope":      scope,
-		"resumed_by": resumedBy,
-		"new_mode":   mode,
-	})
+	if k.auditor != nil {
+		k.auditor.LogInfo(ctx, "kill_switch.resumed", "", map[string]interface{}{
+			"scope":      scope,
+			"resumed_by": resumedBy,
+			"new_mode":   mode,
+		})
+	}
 
 	k.logger.Info("kill switch cleared", "scope", scope, "resumed_by", resumedBy, "new_mode", mode)
 	return nil

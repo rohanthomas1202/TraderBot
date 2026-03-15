@@ -42,15 +42,17 @@ func (d *DeadMansSwitch) RecordHeartbeat(ctx context.Context, service, status, d
 	d.mu.Unlock()
 
 	// Persist to DB for startup recovery
-	_, err := d.db.Exec(ctx,
-		`INSERT INTO watchdog.heartbeats (service_name, last_heartbeat_at, status, detail)
-		 VALUES ($1, $2, $3, $4)
-		 ON CONFLICT (service_name) DO UPDATE SET
-		   last_heartbeat_at = $2, status = $3, detail = $4`,
-		service, now, status, detail,
-	)
-	if err != nil {
-		d.logger.Error("failed to persist heartbeat", "service", service, "error", err)
+	if d.db != nil {
+		_, err := d.db.Exec(ctx,
+			`INSERT INTO watchdog.heartbeats (service_name, last_heartbeat_at, status, detail)
+			 VALUES ($1, $2, $3, $4)
+			 ON CONFLICT (service_name) DO UPDATE SET
+			   last_heartbeat_at = $2, status = $3, detail = $4`,
+			service, now, status, detail,
+		)
+		if err != nil {
+			d.logger.Error("failed to persist heartbeat", "service", service, "error", err)
+		}
 	}
 }
 

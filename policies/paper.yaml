@@ -15,6 +15,8 @@ allowed_markets:
   # Use glob pattern "*" to match any market ID.
   mock:
     - "*"
+  kalshi:
+    - "*"
 
 per_trade:
   max_notional_micros: 10000000000     # $10,000
@@ -38,6 +40,9 @@ per_strategy:
 per_venue:
   mock:
     max_exposure_micros: 100000000000  # $100,000
+    max_daily_loss_micros: 50000000000 # $50,000
+  kalshi:
+    max_exposure_micros: 100000000000  # $100,000 (shadow mode — same as mock)
     max_daily_loss_micros: 50000000000 # $50,000
 
 global:

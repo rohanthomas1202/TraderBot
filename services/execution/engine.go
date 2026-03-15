@@ -385,13 +385,14 @@ func (e *Engine) processFill(ctx context.Context, f *ExchangeFill, riskCallback 
 	// Notify risk engine
 	if riskCallback != nil {
 		riskCallback(ctx, &risk.FillReport{
-			TraceID:     rec.TraceID,
-			StrategyID:  rec.StrategyID,
-			Venue:       rec.Venue,
-			MarketID:    rec.MarketID,
-			Side:        rec.Side,
-			Quantity:    f.Quantity,
-			PriceMicros: f.PriceMicros,
+			TraceID:         rec.TraceID,
+			InternalOrderID: rec.InternalOrderID.String(),
+			StrategyID:      rec.StrategyID,
+			Venue:           rec.Venue,
+			MarketID:        rec.MarketID,
+			Side:            rec.Side,
+			Quantity:        f.Quantity,
+			PriceMicros:     f.PriceMicros,
 		})
 	}
 

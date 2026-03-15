@@ -3,18 +3,24 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"strconv"
 	"syscall"
 	"time"
 
+	"autonomy-platform/gen/executionpb"
+	"autonomy-platform/gen/watchdogpb"
 	"autonomy-platform/internal/audit"
 	"autonomy-platform/internal/events"
+	"autonomy-platform/internal/grpcauth"
 	"autonomy-platform/services/watchdog"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 func main() {
@@ -48,11 +54,24 @@ func main() {
 
 	auditor := audit.NewLogger("watchdog", dbPool)
 
-	// Create kill switch manager.
-	// In Phase 1, exec and risk controls are nil — we don't have gRPC clients yet.
-	// The kill switch still persists events and publishes to NATS.
-	// Services read system mode from the watchdog on startup and via heartbeat responses.
-	killMgr := watchdog.NewKillSwitchManager(dbPool, nil, nil, publisher, auditor)
+	// Connect to execution engine for kill switch actions
+	execAddr := envOrDefault("EXECUTION_ENGINE_ADDR", "localhost:50040")
+	execConn, err := grpc.NewClient(execAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpcauth.CallerIdentityInterceptor("watchdog"),
+	)
+	if err != nil {
+		logger.Error("failed to connect to execution engine", "addr", execAddr, "error", err)
+		os.Exit(1)
+	}
+	defer execConn.Close()
+
+	execClient := executionpb.NewExecutionEngineClient(execConn)
+	execControl := watchdog.NewGRPCExecControl(execClient)
+	riskControl := watchdog.NewGRPCRiskControl()
+
+	// Create kill switch manager with gRPC clients
+	killMgr := watchdog.NewKillSwitchManager(dbPool, execControl, riskControl, publisher, auditor)
 
 	// Load any active halts from DB (survive restarts)
 	if err := killMgr.LoadActiveHalts(ctx); err != nil {
@@ -74,11 +93,40 @@ func main() {
 	// Start dead man's switch monitor
 	go dms.Monitor(ctx)
 
-	// TODO: start gRPC server for TriggerKillSwitch, Heartbeat, GetSystemStatus
-	// TODO: start auto-trigger monitor (reads risk state periodically)
+	// Start gRPC server
+	grpcPort := envOrDefault("GRPC_PORT", "50055")
+	lis, err := net.Listen("tcp", ":"+grpcPort)
+	if err != nil {
+		logger.Error("failed to listen", "port", grpcPort, "error", err)
+		os.Exit(1)
+	}
+
+	allowedCallers := grpcauth.AllowedCallers{
+		"/watchdog.Watchdog/TriggerKillSwitch": {"risk-engine", "trade-ctl"},
+		"/watchdog.Watchdog/Heartbeat":         {"execution-engine", "risk-engine", "strategy-engine"},
+		"/watchdog.Watchdog/GetSystemStatus":   {"*"},
+		"/watchdog.Watchdog/AcknowledgeHalt":   {"trade-ctl"},
+		"/watchdog.Watchdog/ResumeTrading":     {"trade-ctl"},
+	}
+
+	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(grpcauth.UnaryCallerInterceptor(allowedCallers)))
+	watchdogpb.RegisterWatchdogServer(grpcServer, watchdog.NewGRPCServer(killMgr, dms))
+
+	go func() {
+		logger.Info("gRPC server starting", "port", grpcPort)
+		if err := grpcServer.Serve(lis); err != nil {
+			logger.Error("gRPC server failed", "error", err)
+		}
+	}()
+
+	logger.Info("watchdog fully wired",
+		"grpc_port", grpcPort,
+		"execution_engine", execAddr,
+	)
 
 	<-ctx.Done()
 	logger.Info("watchdog shutting down")
+	grpcServer.GracefulStop()
 }
 
 func envOrDefault(key, def string) string {

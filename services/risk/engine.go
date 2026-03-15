@@ -422,13 +422,14 @@ type Approval struct {
 }
 
 type FillReport struct {
-	TraceID    string
-	StrategyID string
-	Venue      string
-	MarketID   string
-	Side       models.Side
-	Quantity   int32
-	PriceMicros int64
+	TraceID         string
+	InternalOrderID string
+	StrategyID      string
+	Venue           string
+	MarketID        string
+	Side            models.Side
+	Quantity        int32
+	PriceMicros     int64
 }
 
 type CheckResultDetail struct {

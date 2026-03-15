@@ -1,4 +1,12 @@
-.PHONY: all build test dev up down migrate status kill ack resume orders risk
+.PHONY: all build test dev up down migrate status kill ack resume orders risk proto
+
+# ─── Protobuf ───
+
+proto:
+	protoc --go_out=. --go_opt=module=autonomy-platform \
+	       --go-grpc_out=. --go-grpc_opt=module=autonomy-platform \
+	       -I. proto/common.proto proto/risk.proto proto/execution.proto \
+	       proto/watchdog.proto proto/mockexchange.proto
 
 # ─── Build ───
 
@@ -92,16 +100,16 @@ simulate: up migrate
 	go run ./cmd/data-ingestion &
 	@sleep 2
 	@echo "Starting watchdog..."
-	go run ./cmd/watchdog &
+	GRPC_PORT=50055 EXECUTION_ENGINE_ADDR=localhost:50040 go run ./cmd/watchdog &
 	@sleep 1
 	@echo "Starting risk engine..."
-	go run ./cmd/risk-engine &
+	GRPC_PORT=50020 go run ./cmd/risk-engine &
 	@sleep 1
 	@echo "Starting execution engine..."
-	go run ./cmd/execution-engine &
+	GRPC_PORT=50040 RISK_ENGINE_ADDR=localhost:50020 WATCHDOG_ADDR=localhost:50055 go run ./cmd/execution-engine &
 	@sleep 1
 	@echo "Starting strategy engine..."
-	go run ./cmd/strategy-engine &
+	RISK_ENGINE_ADDR=localhost:50020 EXECUTION_ENGINE_ADDR=localhost:50040 go run ./cmd/strategy-engine &
 	@echo ""
 	@echo "All services running. Press Ctrl+C to stop."
 	@echo "Monitor with: make status"

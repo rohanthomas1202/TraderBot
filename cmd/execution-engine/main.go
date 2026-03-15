@@ -2,15 +2,23 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"strconv"
 	"syscall"
 	"time"
 
+	"autonomy-platform/gen/commonpb"
+	"autonomy-platform/internal/convert"
+	"autonomy-platform/gen/executionpb"
+	"autonomy-platform/gen/riskpb"
+	"autonomy-platform/gen/watchdogpb"
 	"autonomy-platform/internal/audit"
 	"autonomy-platform/internal/events"
+	"autonomy-platform/internal/grpcauth"
 	"autonomy-platform/internal/ledger"
 	"autonomy-platform/services/execution"
 	"autonomy-platform/services/mockexchange"
@@ -18,6 +26,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 func main() {
@@ -86,27 +96,91 @@ func main() {
 		"open_orders", engine.OpenOrderCount(),
 	)
 
-	// Create a risk engine stub for fill reporting.
-	// In production this would be a gRPC client; here we connect directly.
+	// Connect to risk engine for fill reporting
+	riskAddr := envOrDefault("RISK_ENGINE_ADDR", "localhost:50020")
+	riskConn, err := grpc.NewClient(riskAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpcauth.CallerIdentityInterceptor("execution-engine"),
+	)
+	if err != nil {
+		logger.Error("failed to connect to risk engine", "addr", riskAddr, "error", err)
+		os.Exit(1)
+	}
+	defer riskConn.Close()
+	riskClient := riskpb.NewRiskEngineClient(riskConn)
+
 	riskCallback := func(ctx context.Context, fill *risk.FillReport) error {
-		logger.Info("fill reported to risk",
-			"trace_id", fill.TraceID,
-			"market_id", fill.MarketID,
-			"side", fill.Side,
-			"quantity", fill.Quantity,
-		)
-		return nil
+		_, err := riskClient.ReportFill(ctx, &riskpb.ReportFillRequest{
+			TraceId:         fill.TraceID,
+			InternalOrderId: fill.InternalOrderID,
+			StrategyId:      fill.StrategyID,
+			Market:          &commonpb.Market{Venue: convert.VenueToProto(fill.Venue), MarketId: fill.MarketID},
+			Side:            convert.SideToProto(fill.Side),
+			FilledQuantity:  fill.Quantity,
+			FillPriceMicros: fill.PriceMicros,
+		})
+		if err != nil {
+			logger.Error("failed to report fill to risk engine", "trace_id", fill.TraceID, "error", err)
+		}
+		return err
 	}
 
 	// Start fill polling loop
 	pollInterval := time.Duration(envOrInt("FILL_POLL_INTERVAL_MS", 500)) * time.Millisecond
 	go runFillPoller(ctx, engine, riskCallback, pollInterval, logger)
 
-	// TODO: start gRPC server to accept SubmitOrder, CancelOrder, CancelAll calls
-	// TODO: start heartbeat reporting to watchdog
+	// Connect to watchdog for heartbeats
+	watchdogAddr := envOrDefault("WATCHDOG_ADDR", "localhost:50055")
+	watchdogConn, err := grpc.NewClient(watchdogAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpcauth.CallerIdentityInterceptor("execution-engine"),
+	)
+	if err != nil {
+		logger.Error("failed to connect to watchdog", "addr", watchdogAddr, "error", err)
+		os.Exit(1)
+	}
+	defer watchdogConn.Close()
+	watchdogClient := watchdogpb.NewWatchdogClient(watchdogConn)
+
+	// Start heartbeat loop
+	heartbeatSec := envOrInt("HEARTBEAT_INTERVAL_SEC", 10)
+	go runHeartbeatLoop(ctx, watchdogClient, engine, time.Duration(heartbeatSec)*time.Second, logger)
+
+	// Start gRPC server
+	grpcPort := envOrDefault("GRPC_PORT", "50040")
+	lis, err := net.Listen("tcp", ":"+grpcPort)
+	if err != nil {
+		logger.Error("failed to listen", "port", grpcPort, "error", err)
+		os.Exit(1)
+	}
+
+	allowedCallers := grpcauth.AllowedCallers{
+		"/execution.ExecutionEngine/SubmitOrder":      {"strategy-engine"},
+		"/execution.ExecutionEngine/CancelOrder":      {"watchdog", "trade-ctl"},
+		"/execution.ExecutionEngine/CancelAll":        {"watchdog", "trade-ctl"},
+		"/execution.ExecutionEngine/GetOrders":        {"*"},
+		"/execution.ExecutionEngine/GetOrderSummary":  {"*"},
+	}
+
+	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(grpcauth.UnaryCallerInterceptor(allowedCallers)))
+	executionpb.RegisterExecutionEngineServer(grpcServer, execution.NewGRPCServer(engine, dbPool))
+
+	go func() {
+		logger.Info("gRPC server starting", "port", grpcPort)
+		if err := grpcServer.Serve(lis); err != nil {
+			logger.Error("gRPC server failed", "error", err)
+		}
+	}()
+
+	logger.Info("execution engine fully wired",
+		"grpc_port", grpcPort,
+		"risk_engine", riskAddr,
+		"watchdog", watchdogAddr,
+	)
 
 	<-ctx.Done()
 	logger.Info("execution engine shutting down")
+	grpcServer.GracefulStop()
 }
 
 func runFillPoller(ctx context.Context, engine *execution.Engine, riskCallback func(context.Context, *risk.FillReport) error, interval time.Duration, logger *slog.Logger) {
@@ -126,6 +200,31 @@ func runFillPoller(ctx context.Context, engine *execution.Engine, riskCallback f
 				continue
 			}
 			lastPoll = pollStart
+		}
+	}
+}
+
+func runHeartbeatLoop(ctx context.Context, client watchdogpb.WatchdogClient, engine *execution.Engine, interval time.Duration, logger *slog.Logger) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			resp, err := client.Heartbeat(ctx, &watchdogpb.HeartbeatRequest{
+				ServiceName: "execution-engine",
+				Status:      "healthy",
+				Detail:      fmt.Sprintf("open_orders=%d", engine.OpenOrderCount()),
+			})
+			if err != nil {
+				logger.Error("heartbeat failed", "error", err)
+				continue
+			}
+			if resp.GetSystemMode() != "" {
+				engine.SetSystemMode(resp.GetSystemMode())
+			}
 		}
 	}
 }

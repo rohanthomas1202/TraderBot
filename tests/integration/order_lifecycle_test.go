@@ -131,6 +131,7 @@ func TestOrderLifecycle_ProposalToFill(t *testing.T) {
 		MaxTotalExposureMicros:    50_000_000_000,
 	}
 	execEngine := execution.NewEngine(db, venue, pub, auditor, hmacKey, intentLedger, limits)
+	execEngine.SetReconciled(true)
 
 	// Submit the approved order
 	rec, err := execEngine.SubmitOrder(ctx, approval)

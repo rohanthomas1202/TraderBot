@@ -1,0 +1,45 @@
+# Binaries
+/bin/
+*.exe
+*.out
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Go
+vendor/
+go.sum
+/gen/
+
+# Certificates (production)
+certs/
+
+# Docker volumes
+pgdata/
+natsdata/
+
+# Kalshi / Polymarket credentials
+kalshi_credentials.json
+polymarket_credentials.json
+*.keystore
+
+# Temporary / build
+tmp/
+*.log
+coverage.out
+*.prof

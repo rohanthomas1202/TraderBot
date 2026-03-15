@@ -1,0 +1,160 @@
+syntax = "proto3";
+package mockexchange;
+option go_package = "autonomy-platform/gen/mockexchangepb";
+
+import "google/protobuf/timestamp.proto";
+import "proto/common.proto";
+
+// MockExchange simulates a venue for paper trading.
+// It mirrors the interface that real venue adapters will use,
+// so the execution engine doesn't know it's paper trading.
+service MockExchange {
+  // Submit an order. Returns ack or rejection.
+  rpc SubmitOrder(MockSubmitRequest) returns (MockSubmitResponse);
+
+  // Cancel an order.
+  rpc CancelOrder(MockCancelRequest) returns (MockCancelResponse);
+
+  // Cancel all orders.
+  rpc CancelAll(MockCancelAllRequest) returns (MockCancelAllResponse);
+
+  // Query an order's status.
+  rpc GetOrder(MockGetOrderRequest) returns (MockOrderStatus);
+
+  // Get all open orders.
+  rpc GetOpenOrders(MockGetOpenOrdersRequest) returns (MockGetOpenOrdersResponse);
+
+  // Get current positions (net from fills).
+  rpc GetPositions(MockGetPositionsRequest) returns (MockGetPositionsResponse);
+
+  // Get simulated balance.
+  rpc GetBalance(MockGetBalanceRequest) returns (MockGetBalanceResponse);
+
+  // Poll for recent fills since a timestamp.
+  rpc PollFills(MockPollFillsRequest) returns (MockPollFillsResponse);
+
+  // Admin: inject market data for simulation.
+  rpc SetMarketData(MockSetMarketDataRequest) returns (MockSetMarketDataResponse);
+
+  // Admin: configure simulated conditions (latency, rejection rate, etc.)
+  rpc SetSimulationConfig(SimulationConfig) returns (SimulationConfigResponse);
+}
+
+message MockSubmitRequest {
+  string client_order_id = 1;    // our internal order ID (dedup key)
+  string market_id = 2;
+  string side = 3;               // "buy" or "sell"
+  int32 quantity = 4;
+  int64 price_micros = 5;
+}
+
+message MockSubmitResponse {
+  string exchange_order_id = 1;
+  string status = 2;             // "open", "rejected"
+  string reject_reason = 3;     // only if rejected
+}
+
+message MockCancelRequest {
+  string exchange_order_id = 1;
+}
+
+message MockCancelResponse {
+  bool success = 1;
+  string detail = 2;
+}
+
+message MockCancelAllRequest {}
+
+message MockCancelAllResponse {
+  int32 cancelled_count = 1;
+}
+
+message MockGetOrderRequest {
+  string exchange_order_id = 1;
+}
+
+message MockOrderStatus {
+  string exchange_order_id = 1;
+  string client_order_id = 2;
+  string market_id = 3;
+  string side = 4;
+  int32 original_quantity = 5;
+  int32 filled_quantity = 6;
+  int32 remaining_quantity = 7;
+  int64 price_micros = 8;
+  string status = 9;             // "open", "partially_filled", "filled", "cancelled"
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+}
+
+message MockGetOpenOrdersRequest {}
+
+message MockGetOpenOrdersResponse {
+  repeated MockOrderStatus orders = 1;
+}
+
+message MockGetPositionsRequest {}
+
+message MockGetPositionsResponse {
+  repeated MockPosition positions = 1;
+}
+
+message MockPosition {
+  string market_id = 1;
+  int32 quantity = 2;            // positive = long, negative = short
+  int64 avg_price_micros = 3;
+}
+
+message MockGetBalanceRequest {}
+
+message MockGetBalanceResponse {
+  int64 available_micros = 1;
+  int64 reserved_micros = 2;    // locked in open orders
+}
+
+message MockPollFillsRequest {
+  google.protobuf.Timestamp since = 1;
+}
+
+message MockPollFillsResponse {
+  repeated MockFill fills = 1;
+}
+
+message MockFill {
+  string fill_id = 1;
+  string exchange_order_id = 2;
+  string client_order_id = 3;
+  string market_id = 4;
+  string side = 5;
+  int32 quantity = 6;
+  int64 price_micros = 7;
+  int64 fee_micros = 8;
+  google.protobuf.Timestamp filled_at = 9;
+}
+
+message MockSetMarketDataRequest {
+  string market_id = 1;
+  int64 bid_micros = 2;
+  int64 ask_micros = 3;
+  int64 last_micros = 4;
+  int32 bid_depth = 5;
+  int32 ask_depth = 6;
+}
+
+message MockSetMarketDataResponse {
+  bool success = 1;
+}
+
+// SimulationConfig controls mock exchange behavior for testing.
+message SimulationConfig {
+  int32 fill_delay_ms = 1;           // simulated latency before fill (default: 100)
+  double fill_probability = 2;       // probability a resting order fills (0.0-1.0, default: 0.5)
+  double partial_fill_probability = 3; // probability of partial vs full fill (default: 0.2)
+  double rejection_rate = 4;          // fraction of orders rejected (default: 0.0)
+  bool simulate_stale_data = 5;       // stop updating market data timestamps
+  int32 stale_after_seconds = 6;      // how many seconds until data is considered stale
+}
+
+message SimulationConfigResponse {
+  bool success = 1;
+}

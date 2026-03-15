@@ -1,0 +1,189 @@
+version: "3.9"
+
+# Phase 1: Local development stack for paper trading
+# All services run locally. No real exchange credentials.
+# No real signing keys. No real money.
+
+services:
+  # ─── Infrastructure ───
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: trader
+      POSTGRES_PASSWORD: localdev
+      POSTGRES_DB: autonomy
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trader -d autonomy"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  nats:
+    image: nats:2.10-alpine
+    command: ["--jetstream", "--store_dir=/data", "-m", "8222"]
+    ports:
+      - "4222:4222"   # client
+      - "8222:8222"   # monitoring
+    volumes:
+      - natsdata:/data
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ─── Application Services ───
+
+  mock-exchange:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE: mock-exchange
+    environment:
+      GRPC_PORT: "50060"
+      LOG_LEVEL: debug
+      FILL_DELAY_MS: "100"
+      FILL_PROBABILITY: "0.5"
+      PARTIAL_FILL_PROBABILITY: "0.2"
+      REJECTION_RATE: "0.0"
+    ports:
+      - "50060:50060"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  watchdog:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE: watchdog
+    environment:
+      GRPC_PORT: "50055"
+      POSTGRES_URL: "postgres://trader:localdev@postgres:5432/autonomy?sslmode=disable"
+      NATS_URL: "nats://nats:4222"
+      EXECUTION_ENGINE_ADDR: "execution-engine:50040"
+      HEARTBEAT_INTERVAL_SEC: "10"
+      HEARTBEAT_GRACE_MULTIPLE: "3"
+      MONITOR_INTERVAL_SEC: "5"
+      LOG_LEVEL: debug
+    ports:
+      - "50055:50055"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+
+  data-ingestion:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE: data-ingestion
+    environment:
+      GRPC_PORT: "50010"
+      NATS_URL: "nats://nats:4222"
+      # Phase 1: use mock exchange data, not real Kalshi
+      MOCK_EXCHANGE_ADDR: "mock-exchange:50060"
+      DATA_SOURCE: "mock"
+      PUBLISH_INTERVAL_MS: "1000"
+      LOG_LEVEL: debug
+    ports:
+      - "50010:50010"
+    depends_on:
+      nats:
+        condition: service_healthy
+      mock-exchange:
+        condition: service_started
+
+  risk-engine:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE: risk-engine
+    environment:
+      GRPC_PORT: "50020"
+      POSTGRES_URL: "postgres://trader:localdev@postgres:5432/autonomy?sslmode=disable"
+      NATS_URL: "nats://nats:4222"
+      WATCHDOG_ADDR: "watchdog:50055"
+      POLICY_FILE: "/app/policies/paper.yaml"
+      HMAC_KEY: "phase1-paper-trading-hmac-key-not-for-production"
+      LOG_LEVEL: debug
+    ports:
+      - "50020:50020"
+    volumes:
+      - ./policies:/app/policies:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      watchdog:
+        condition: service_started
+
+  strategy-engine:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE: strategy-engine
+    environment:
+      GRPC_PORT: "50030"
+      NATS_URL: "nats://nats:4222"
+      RISK_ENGINE_ADDR: "risk-engine:50020"
+      STRATEGY: "simple-momentum"
+      SIGNAL_INTERVAL_SEC: "5"
+      LOG_LEVEL: debug
+    ports:
+      - "50030:50030"
+    depends_on:
+      nats:
+        condition: service_healthy
+      risk-engine:
+        condition: service_started
+
+  execution-engine:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE: execution-engine
+    environment:
+      GRPC_PORT: "50040"
+      POSTGRES_URL: "postgres://trader:localdev@postgres:5432/autonomy?sslmode=disable"
+      NATS_URL: "nats://nats:4222"
+      RISK_ENGINE_ADDR: "risk-engine:50020"
+      WATCHDOG_ADDR: "watchdog:50055"
+      MOCK_EXCHANGE_ADDR: "mock-exchange:50060"
+      HMAC_KEY: "phase1-paper-trading-hmac-key-not-for-production"
+      EXECUTION_MODE: "paper"
+      VENUE: "mock"
+      FILL_POLL_INTERVAL_MS: "2000"
+      HEARTBEAT_INTERVAL_SEC: "10"
+      LOG_LEVEL: debug
+    ports:
+      - "50040:50040"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      mock-exchange:
+        condition: service_started
+      risk-engine:
+        condition: service_started
+      watchdog:
+        condition: service_started
+
+volumes:
+  pgdata:
+  natsdata:

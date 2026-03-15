@@ -1,0 +1,46 @@
+syntax = "proto3";
+package common;
+option go_package = "autonomy-platform/gen/commonpb";
+
+import "google/protobuf/timestamp.proto";
+
+enum Venue {
+  VENUE_UNSPECIFIED = 0;
+  VENUE_KALSHI = 1;
+  VENUE_POLYMARKET = 2;
+  VENUE_MOCK = 3; // Phase 1 paper trading
+}
+
+enum Side {
+  SIDE_UNSPECIFIED = 0;
+  SIDE_BUY = 1;
+  SIDE_SELL = 2;
+}
+
+enum OrderType {
+  ORDER_TYPE_UNSPECIFIED = 0;
+  ORDER_TYPE_LIMIT = 1;
+}
+
+// Money represents USD in microdollars. 1 USD = 1,000,000 microdollars.
+// int64 range covers ±9.2 trillion USD which is sufficient.
+message Money {
+  int64 amount_micros = 1;
+}
+
+message Market {
+  Venue venue = 1;
+  string market_id = 2;       // venue-native identifier
+  string display_name = 3;    // human-readable, for logging/display only
+}
+
+message MarketData {
+  Market market = 1;
+  int64 bid_price_micros = 2;    // best bid
+  int64 ask_price_micros = 3;    // best ask
+  int64 last_price_micros = 4;
+  int32 bid_depth = 5;           // number of bid levels
+  int32 ask_depth = 6;           // number of ask levels
+  double volume_24h = 7;
+  google.protobuf.Timestamp updated_at = 8;
+}

@@ -1,0 +1,145 @@
+syntax = "proto3";
+package risk;
+option go_package = "autonomy-platform/gen/riskpb";
+
+import "google/protobuf/timestamp.proto";
+import "proto/common.proto";
+
+service RiskEngine {
+  // Strategy engine submits a proposed order for evaluation.
+  // Returns approval (with HMAC) or denial (with reasons).
+  rpc EvaluateOrder(EvaluateOrderRequest) returns (EvaluateOrderResponse);
+
+  // Read current risk state. Used by watchdog, reconciliation, CLI.
+  rpc GetRiskState(GetRiskStateRequest) returns (RiskState);
+
+  // Operator updates a risk limit. Requires risk_manager role.
+  rpc UpdateLimit(UpdateLimitRequest) returns (UpdateLimitResponse);
+
+  // Notify risk engine of a fill (from execution engine).
+  rpc ReportFill(ReportFillRequest) returns (ReportFillResponse);
+}
+
+// ─── Order Proposal & Evaluation ───
+
+message ProposedOrder {
+  string trace_id = 1;
+  string strategy_id = 2;
+  common.Market market = 3;
+  common.Side side = 4;
+  common.OrderType order_type = 5;
+  int32 quantity = 6;
+  int64 price_micros = 7;         // limit price in microdollars (0–1,000,000 for prediction markets)
+  int64 notional_micros = 8;      // quantity × price_micros
+  google.protobuf.Timestamp proposed_at = 9;
+}
+
+message EvaluateOrderRequest {
+  ProposedOrder order = 1;
+}
+
+message EvaluateOrderResponse {
+  SignedApproval approval = 1;
+}
+
+// ─── Signed Approval ───
+
+enum ApprovalDecision {
+  DECISION_UNSPECIFIED = 0;
+  DECISION_APPROVED = 1;
+  DECISION_DENIED = 2;
+  DECISION_ESCALATED = 3;
+}
+
+enum CheckResult {
+  CHECK_PASS = 0;
+  CHECK_FAIL = 1;
+  CHECK_SKIP = 2;
+}
+
+message PolicyCheckDetail {
+  string check_name = 1;
+  CheckResult result = 2;
+  string detail = 3;
+}
+
+message SignedApproval {
+  string trace_id = 1;
+  ProposedOrder order = 2;
+  ApprovalDecision decision = 3;
+  repeated PolicyCheckDetail checks = 4;
+  string policy_config_hash = 5;
+  google.protobuf.Timestamp decided_at = 6;
+  bytes hmac_signature = 7;       // HMAC-SHA256 over canonical fields
+}
+
+// ─── Risk State ───
+
+message GetRiskStateRequest {}
+
+message RiskState {
+  common.Money total_exposure = 1;
+  common.Money daily_pnl = 2;
+  common.Money peak_equity = 3;
+  double drawdown_pct = 4;
+  string system_mode = 5;        // "normal", "soft_pause", "cancel_only", "full_stop"
+  map<string, StrategyRiskState> strategies = 6;
+  map<string, VenueRiskState> venues = 7;
+  map<string, MarketRiskState> markets = 8;
+  google.protobuf.Timestamp as_of = 9;
+}
+
+message StrategyRiskState {
+  common.Money daily_pnl = 1;
+  common.Money exposure = 2;
+  int32 daily_order_count = 3;
+  int32 consecutive_losses = 4;
+  bool halted = 5;
+  string halt_reason = 6;
+}
+
+message VenueRiskState {
+  common.Money daily_pnl = 1;
+  common.Money exposure = 2;
+  bool halted = 3;
+}
+
+message MarketRiskState {
+  int32 position_contracts = 1;
+  int64 position_notional_micros = 2;
+  double concentration_pct = 3;
+}
+
+// ─── Limit Updates ───
+
+message UpdateLimitRequest {
+  string limit_name = 1;
+  string scope = 2;            // "global", "venue:mock", "strategy:momentum-v1"
+  int64 new_value_micros = 3;
+  string changed_by = 4;
+  string reason = 5;
+}
+
+message UpdateLimitResponse {
+  bool success = 1;
+  int64 old_value_micros = 2;
+  int64 new_value_micros = 3;
+}
+
+// ─── Fill Reporting ───
+
+message ReportFillRequest {
+  string trace_id = 1;
+  string internal_order_id = 2;
+  string strategy_id = 3;
+  common.Market market = 4;
+  common.Side side = 5;
+  int32 filled_quantity = 6;
+  int64 fill_price_micros = 7;
+  int64 fee_micros = 8;
+  google.protobuf.Timestamp filled_at = 9;
+}
+
+message ReportFillResponse {
+  bool acknowledged = 1;
+}

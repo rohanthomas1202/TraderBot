@@ -1,0 +1,114 @@
+syntax = "proto3";
+package execution;
+option go_package = "autonomy-platform/gen/executionpb";
+
+import "google/protobuf/timestamp.proto";
+import "proto/common.proto";
+import "proto/risk.proto";
+
+service ExecutionEngine {
+  // Submit an approved order for execution.
+  // Only accepts orders wrapped in a SignedApproval.
+  rpc SubmitOrder(SubmitOrderRequest) returns (SubmitOrderResponse);
+
+  // Cancel a specific order by internal ID.
+  rpc CancelOrder(CancelOrderRequest) returns (CancelOrderResponse);
+
+  // Cancel all open orders. Kill-switch path.
+  rpc CancelAll(CancelAllRequest) returns (CancelAllResponse);
+
+  // Query order state. Used by reconciliation, CLI, watchdog.
+  rpc GetOrders(GetOrdersRequest) returns (GetOrdersResponse);
+
+  // Get summary counts of orders by status.
+  rpc GetOrderSummary(GetOrderSummaryRequest) returns (GetOrderSummaryResponse);
+}
+
+// ─── Submit ───
+
+message SubmitOrderRequest {
+  risk.SignedApproval approval = 1;
+  // The execution engine NEVER accepts raw orders.
+  // It only accepts orders wrapped in a signed approval from risk-engine.
+}
+
+message SubmitOrderResponse {
+  OrderRecord order = 1;
+}
+
+// ─── Order Record ───
+
+enum OrderStatus {
+  ORDER_STATUS_UNSPECIFIED = 0;
+  ORDER_STATUS_PENDING = 1;
+  ORDER_STATUS_OPEN = 2;
+  ORDER_STATUS_PARTIALLY_FILLED = 3;
+  ORDER_STATUS_FILLED = 4;
+  ORDER_STATUS_CANCELLED = 5;
+  ORDER_STATUS_REJECTED = 6;
+  ORDER_STATUS_EXPIRED = 7;
+  ORDER_STATUS_FAILED = 8;
+}
+
+message OrderRecord {
+  string trace_id = 1;
+  string internal_order_id = 2;
+  string exchange_order_id = 3;
+  risk.ProposedOrder proposed = 4;
+  OrderStatus status = 5;
+  int32 filled_quantity = 6;
+  int64 avg_fill_price_micros = 7;
+  google.protobuf.Timestamp submitted_at = 8;
+  google.protobuf.Timestamp last_updated_at = 9;
+  string credential_id = 10;
+  string signing_key_id = 11;
+}
+
+// ─── Cancel ───
+
+message CancelOrderRequest {
+  string internal_order_id = 1;
+  string reason = 2;
+  string cancelled_by = 3;       // service name or operator ID
+}
+
+message CancelOrderResponse {
+  bool success = 1;
+  string detail = 2;
+}
+
+message CancelAllRequest {
+  string scope = 1;              // "global", "venue:mock", "strategy:momentum-v1"
+  string scope_id = 2;
+  string reason = 3;
+  string cancelled_by = 4;
+}
+
+message CancelAllResponse {
+  int32 cancelled_count = 1;
+  int32 failed_count = 2;
+  repeated string failed_order_ids = 3;
+}
+
+// ─── Query ───
+
+message GetOrdersRequest {
+  repeated string statuses = 1;  // filter by status, empty = all
+  string strategy_id = 2;       // filter by strategy, empty = all
+  int32 limit = 3;              // max results, default 100
+}
+
+message GetOrdersResponse {
+  repeated OrderRecord orders = 1;
+}
+
+message GetOrderSummaryRequest {}
+
+message GetOrderSummaryResponse {
+  int32 pending = 1;
+  int32 open = 2;
+  int32 partially_filled = 3;
+  int32 filled_today = 4;
+  int32 cancelled_today = 5;
+  int32 rejected_today = 6;
+}

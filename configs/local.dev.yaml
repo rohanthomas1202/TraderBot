@@ -1,0 +1,36 @@
+# Local development configuration
+# Used when running services outside Docker (go run ./cmd/...)
+
+database:
+  url: "postgres://trader:localdev@localhost:5432/autonomy?sslmode=disable"
+  max_connections: 10
+  min_connections: 2
+
+nats:
+  url: "nats://localhost:4222"
+  # JetStream streams are auto-created on first publish
+
+services:
+  mock_exchange:
+    addr: "localhost:50060"
+  risk_engine:
+    addr: "localhost:50020"
+  execution_engine:
+    addr: "localhost:50040"
+  watchdog:
+    addr: "localhost:50055"
+  data_ingestion:
+    addr: "localhost:50010"
+  strategy_engine:
+    addr: "localhost:50030"
+
+logging:
+  level: debug
+  format: text    # "text" for dev, "json" for production
+  audit_to_db: true
+  audit_to_s3: false  # Phase 1: no S3 sink
+
+grpc:
+  # Phase 1: no mTLS. Services trust each other on localhost.
+  # Production will require mTLS with per-service certificates.
+  tls_enabled: false

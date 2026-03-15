@@ -67,6 +67,7 @@ type Engine struct {
 	openOrders  map[string]*models.OrderRecord // internal_order_id → record
 	intentMap   map[string]uuid.UUID           // internal_order_id → intent_id
 	systemMode  string
+	reconciled  bool // true after startup reconciliation passes
 }
 
 func NewEngine(db *pgxpool.Pool, venue VenueAdapter, publisher *events.Publisher, auditor *audit.Logger, hmacKey []byte, l *ledger.Ledger, limits ledger.ExposureLimits) *Engine {
@@ -139,6 +140,71 @@ func (e *Engine) LoadOpenOrders(ctx context.Context) error {
 	return nil
 }
 
+// ReplayIntentLedger replays the full intent ledger to reconstruct exposure
+// state from scratch. Returns the rebuilt exposure state for verification.
+// This is the authoritative recovery path: the ledger is the source of truth.
+func (e *Engine) ReplayIntentLedger(ctx context.Context) (*ledger.ExposureState, error) {
+	intents, err := e.ledger.ReplayAll(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("replay intent ledger: %w", err)
+	}
+
+	exposure := ledger.ReplayFromIntents(intents)
+
+	var outstanding, terminal int
+	for _, intent := range intents {
+		if intent.Status.IsOutstanding() {
+			outstanding++
+		} else {
+			terminal++
+		}
+	}
+
+	e.logger.Info("replayed intent ledger",
+		"total_intents", len(intents),
+		"outstanding", outstanding,
+		"terminal", terminal,
+		"total_exposure_micros", exposure.TotalNotionalMicros,
+	)
+
+	return exposure, nil
+}
+
+// RecoverFull performs full crash recovery:
+// 1. Load open orders from DB
+// 2. Replay intent ledger to verify exposure consistency
+// 3. Log any discrepancies between open orders and outstanding intents
+func (e *Engine) RecoverFull(ctx context.Context) error {
+	if err := e.LoadOpenOrders(ctx); err != nil {
+		return fmt.Errorf("load open orders: %w", err)
+	}
+
+	exposure, err := e.ReplayIntentLedger(ctx)
+	if err != nil {
+		return fmt.Errorf("replay ledger: %w", err)
+	}
+
+	// Cross-check: number of outstanding intents should match open orders
+	e.mu.RLock()
+	openCount := len(e.openOrders)
+	e.mu.RUnlock()
+
+	outstandingCount := len(exposure.Outstanding)
+	if outstandingCount > 0 && openCount == 0 {
+		e.logger.Warn("intent ledger has outstanding intents but no open orders in DB",
+			"outstanding_intents", outstandingCount,
+		)
+	}
+
+	e.logger.Info("full recovery complete",
+		"open_orders", openCount,
+		"exposure_markets", outstandingCount,
+		"total_exposure_micros", exposure.TotalNotionalMicros,
+	)
+
+	return nil
+}
+
 // SubmitOrder validates the approval, persists the order, and sends to the venue.
 func (e *Engine) SubmitOrder(ctx context.Context, approval *risk.Approval) (*models.OrderRecord, error) {
 	// Step 1: Verify HMAC — execution engine cannot forge approvals
@@ -151,10 +217,14 @@ func (e *Engine) SubmitOrder(ctx context.Context, approval *risk.Approval) (*mod
 		return nil, fmt.Errorf("order not approved: %s", approval.Decision)
 	}
 
-	// Step 3: Check system mode
+	// Step 3: Check reconciliation gate and system mode
 	e.mu.RLock()
 	mode := e.systemMode
+	reconciled := e.reconciled
 	e.mu.RUnlock()
+	if !reconciled {
+		return nil, fmt.Errorf("startup reconciliation not yet passed, rejecting new orders")
+	}
 	if mode != "normal" {
 		return nil, fmt.Errorf("system in %s mode, rejecting new orders", mode)
 	}
@@ -454,4 +524,24 @@ func (e *Engine) OpenOrderCount() int {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return len(e.openOrders)
+}
+
+// GetVenueAdapter returns the underlying venue adapter, for use by
+// the reconciliation engine to query exchange state.
+func (e *Engine) GetVenueAdapter() VenueAdapter {
+	return e.venue
+}
+
+// IsReconciled returns whether the startup reconciliation check has passed.
+func (e *Engine) IsReconciled() bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.reconciled
+}
+
+// SetReconciled marks the engine as having passed startup reconciliation.
+func (e *Engine) SetReconciled(v bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.reconciled = v
 }

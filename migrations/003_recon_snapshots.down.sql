@@ -1,0 +1,2 @@
+DROP TABLE IF EXISTS recon.snapshots;
+DROP SCHEMA IF EXISTS recon;

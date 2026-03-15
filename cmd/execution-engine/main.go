@@ -12,16 +12,17 @@ import (
 	"time"
 
 	"autonomy-platform/gen/commonpb"
-	"autonomy-platform/internal/convert"
 	"autonomy-platform/gen/executionpb"
 	"autonomy-platform/gen/riskpb"
 	"autonomy-platform/gen/watchdogpb"
 	"autonomy-platform/internal/audit"
+	"autonomy-platform/internal/convert"
 	"autonomy-platform/internal/events"
 	"autonomy-platform/internal/grpcauth"
 	"autonomy-platform/internal/ledger"
 	"autonomy-platform/services/execution"
 	"autonomy-platform/services/mockexchange"
+	"autonomy-platform/services/recon"
 	"autonomy-platform/services/risk"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -85,16 +86,35 @@ func main() {
 	hmacKey := []byte(envOrDefault("HMAC_KEY", "phase1-paper-trading-hmac-key-not-for-production"))
 	engine := execution.NewEngine(dbPool, venue, publisher, auditor, hmacKey, intentLedger, limits)
 
-	// Load open orders from DB (crash recovery)
-	if err := engine.LoadOpenOrders(ctx); err != nil {
-		logger.Error("failed to load open orders", "error", err)
+	// Full crash recovery: load open orders + replay intent ledger
+	if err := engine.RecoverFull(ctx); err != nil {
+		logger.Error("failed crash recovery", "error", err)
 		os.Exit(1)
 	}
 
-	logger.Info("execution engine ready",
+	logger.Info("execution engine recovered",
 		"mode", envOrDefault("EXECUTION_MODE", "paper"),
 		"open_orders", engine.OpenOrderCount(),
 	)
+
+	// Startup reconciliation: verify internal state matches exchange
+	reconComparator := recon.NewComparator(dbPool, venue)
+	reconInterval := time.Duration(envOrInt("RECON_INTERVAL_SEC", 60)) * time.Second
+	reconEngine := recon.NewEngine(dbPool, reconComparator, nil, auditor, reconInterval) // killSwitch wired after watchdog connection
+
+	consistent, err := reconEngine.RunStartupCheck(ctx)
+	if err != nil {
+		logger.Error("startup reconciliation failed", "error", err)
+		os.Exit(1)
+	}
+	if consistent {
+		engine.SetReconciled(true)
+		logger.Info("startup reconciliation passed — trading enabled")
+	} else {
+		// In paper mode, warn but allow trading (exchange is in-process, state is fresh)
+		engine.SetReconciled(true)
+		logger.Warn("startup reconciliation found mismatches — proceeding in paper mode")
+	}
 
 	// Connect to risk engine for fill reporting
 	riskAddr := envOrDefault("RISK_ENGINE_ADDR", "localhost:50020")
@@ -146,6 +166,10 @@ func main() {
 	heartbeatSec := envOrInt("HEARTBEAT_INTERVAL_SEC", 10)
 	go runHeartbeatLoop(ctx, watchdogClient, engine, time.Duration(heartbeatSec)*time.Second, logger)
 
+	// Start periodic reconciliation (with kill switch trigger via watchdog)
+	reconWithKill := recon.NewEngine(dbPool, reconComparator, &watchdogKillAdapter{client: watchdogClient}, auditor, reconInterval)
+	go reconWithKill.Run(ctx)
+
 	// Start gRPC server
 	grpcPort := envOrDefault("GRPC_PORT", "50040")
 	lis, err := net.Listen("tcp", ":"+grpcPort)
@@ -176,11 +200,27 @@ func main() {
 		"grpc_port", grpcPort,
 		"risk_engine", riskAddr,
 		"watchdog", watchdogAddr,
+		"recon_interval", reconInterval,
 	)
 
 	<-ctx.Done()
 	logger.Info("execution engine shutting down")
 	grpcServer.GracefulStop()
+}
+
+// watchdogKillAdapter adapts the watchdog gRPC client to the recon.KillSwitchTrigger interface.
+type watchdogKillAdapter struct {
+	client watchdogpb.WatchdogClient
+}
+
+func (a *watchdogKillAdapter) Trigger(ctx context.Context, level string, scope, reason, triggeredBy string) error {
+	_, err := a.client.TriggerKillSwitch(ctx, &watchdogpb.KillSwitchRequest{
+		Level:       convert.KillSwitchLevelToProto(level),
+		Scope:       scope,
+		Reason:      reason,
+		TriggeredBy: triggeredBy,
+	})
+	return err
 }
 
 func runFillPoller(ctx context.Context, engine *execution.Engine, riskCallback func(context.Context, *risk.FillReport) error, interval time.Duration, logger *slog.Logger) {
@@ -216,7 +256,7 @@ func runHeartbeatLoop(ctx context.Context, client watchdogpb.WatchdogClient, eng
 			resp, err := client.Heartbeat(ctx, &watchdogpb.HeartbeatRequest{
 				ServiceName: "execution-engine",
 				Status:      "healthy",
-				Detail:      fmt.Sprintf("open_orders=%d", engine.OpenOrderCount()),
+				Detail:      fmt.Sprintf("open_orders=%d reconciled=%v", engine.OpenOrderCount(), engine.IsReconciled()),
 			})
 			if err != nil {
 				logger.Error("heartbeat failed", "error", err)

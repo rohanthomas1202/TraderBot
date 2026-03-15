@@ -179,12 +179,50 @@ func (e *Engine) LoadState(ctx context.Context) error {
 	}
 	e.state.SystemMode = mode
 
+	// Load active halt details for strategy halts
+	haltRows, err := e.db.Query(ctx,
+		`SELECT scope, reason
+		 FROM watchdog.kill_switch_events
+		 WHERE resumed = FALSE AND scope LIKE 'strategy:%'`)
+	if err != nil {
+		e.logger.Warn("failed to load strategy halts", "error", err)
+		// Non-fatal: continue with what we have
+	} else {
+		defer haltRows.Close()
+		for haltRows.Next() {
+			var scope, reason string
+			if err := haltRows.Scan(&scope, &reason); err != nil {
+				e.logger.Warn("failed to scan strategy halt", "error", err)
+				continue
+			}
+			// scope is "strategy:<id>"
+			if len(scope) > 9 {
+				stratID := scope[9:]
+				ss := e.getOrCreateStrategy(stratID)
+				ss.Halted = true
+				ss.HaltReason = reason
+			}
+		}
+	}
+
 	e.logger.Info("risk state loaded",
 		"system_mode", e.state.SystemMode,
 		"total_exposure", e.state.TotalExposure.String(),
 		"daily_pnl", e.state.DailyPnL.String(),
+		"positions", len(e.state.Markets),
 	)
 	return nil
+}
+
+// getOrCreateStrategy returns the strategy state, creating it if needed.
+// Must be called with e.mu held.
+func (e *Engine) getOrCreateStrategy(strategyID string) *StrategyState {
+	ss, exists := e.state.Strategies[strategyID]
+	if !exists {
+		ss = &StrategyState{}
+		e.state.Strategies[strategyID] = ss
+	}
+	return ss
 }
 
 // EvaluateOrder runs all pre-trade checks and returns a signed approval or denial.

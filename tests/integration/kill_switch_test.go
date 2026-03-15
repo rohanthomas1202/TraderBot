@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"autonomy-platform/internal/audit"
+	"autonomy-platform/internal/ledger"
 	"autonomy-platform/internal/models"
 	"autonomy-platform/services/execution"
 	"autonomy-platform/services/risk"
@@ -27,8 +28,13 @@ func TestKillSwitch_BlocksNewOrders(t *testing.T) {
 	auditor := audit.NewLogger("test", db)
 
 	// Create execution engine
-	venue := execution.NewMockAdapter("localhost:50060")
-	execEngine := execution.NewEngine(db, venue, pub, auditor, hmacKey)
+	venue := execution.NewPaperAdapterDefault()
+	intentLedger := ledger.NewLedger(db)
+	limits := ledger.ExposureLimits{
+		MaxPositionNotionalMicros: 10_000_000_000,
+		MaxTotalExposureMicros:    50_000_000_000,
+	}
+	execEngine := execution.NewEngine(db, venue, pub, auditor, hmacKey, intentLedger, limits)
 
 	// Create kill switch manager connected to execution engine
 	killMgr := watchdog.NewKillSwitchManager(db, execEngine, nil, pub, auditor)
@@ -92,8 +98,13 @@ func TestKillSwitch_AckResumeFlow(t *testing.T) {
 	ctx := context.Background()
 	auditor := audit.NewLogger("test", db)
 
-	venue := execution.NewMockAdapter("localhost:50060")
-	execEngine := execution.NewEngine(db, venue, pub, auditor, []byte("test"))
+	venue := execution.NewPaperAdapterDefault()
+	intentLedger := ledger.NewLedger(db)
+	limits := ledger.ExposureLimits{
+		MaxPositionNotionalMicros: 10_000_000_000,
+		MaxTotalExposureMicros:    50_000_000_000,
+	}
+	execEngine := execution.NewEngine(db, venue, pub, auditor, []byte("test"), intentLedger, limits)
 	killMgr := watchdog.NewKillSwitchManager(db, execEngine, nil, pub, auditor)
 
 	// Trigger

@@ -135,17 +135,18 @@ func (s *Server) SubmitOrder(ctx context.Context, clientID, marketID, side strin
 	// Check for simulated rejection
 	if s.cfg.RejectionRate > 0 && s.rng.Float64() < s.cfg.RejectionRate {
 		order := &Order{
-			ExchangeID: exchID,
-			ClientID:   clientID,
-			MarketID:   marketID,
-			Side:       side,
-			Quantity:   qty,
+			ExchangeID:  exchID,
+			ClientID:    clientID,
+			MarketID:    marketID,
+			Side:        side,
+			Quantity:    qty,
 			PriceMicros: priceMicros,
-			Status:     "rejected",
-			CreatedAt:  time.Now(),
+			Status:      "rejected",
+			CreatedAt:   time.Now(),
 		}
 		s.orders[exchID] = order
-		return order, nil
+		snapshot := *order
+		return &snapshot, nil
 	}
 
 	order := &Order{
@@ -160,10 +161,14 @@ func (s *Server) SubmitOrder(ctx context.Context, clientID, marketID, side strin
 	}
 	s.orders[exchID] = order
 
+	// Return a snapshot so the caller can safely read without racing
+	// against the fill goroutine that mutates the stored order.
+	snapshot := *order
+
 	// Schedule fill simulation
 	go s.simulateFillProcess(exchID)
 
-	return order, nil
+	return &snapshot, nil
 }
 
 func (s *Server) simulateFillProcess(exchID string) {
@@ -282,4 +287,12 @@ func (s *Server) GetBalance() int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.balance
+}
+
+// GetOrder returns an order by exchange ID, or (nil, false) if not found.
+func (s *Server) GetOrder(exchID string) (*Order, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	order, exists := s.orders[exchID]
+	return order, exists
 }

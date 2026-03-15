@@ -10,8 +10,10 @@ import (
 	"autonomy-platform/internal/audit"
 	"autonomy-platform/internal/config"
 	"autonomy-platform/internal/events"
+	"autonomy-platform/internal/ledger"
 	"autonomy-platform/internal/models"
 	"autonomy-platform/services/execution"
+	"autonomy-platform/services/mockexchange"
 	"autonomy-platform/services/risk"
 
 	"github.com/google/uuid"
@@ -115,9 +117,20 @@ func TestOrderLifecycle_ProposalToFill(t *testing.T) {
 		t.Fatalf("expected approved, got %s", approval.Decision)
 	}
 
-	// Create execution engine with mock adapter
-	venue := execution.NewMockAdapter("localhost:50060")
-	execEngine := execution.NewEngine(db, venue, pub, auditor, hmacKey)
+	// Create execution engine with paper adapter and intent ledger
+	venue := execution.NewPaperAdapter(mockexchange.Config{
+		FillDelayMs:     50,
+		FillProbability: 1.0, // always fill
+		PartialFillProb: 0.0,
+		RejectionRate:   0.0,
+		InitialBalanceMicros: 100_000_000_000,
+	})
+	intentLedger := ledger.NewLedger(db)
+	limits := ledger.ExposureLimits{
+		MaxPositionNotionalMicros: 10_000_000_000,
+		MaxTotalExposureMicros:    50_000_000_000,
+	}
+	execEngine := execution.NewEngine(db, venue, pub, auditor, hmacKey, intentLedger, limits)
 
 	// Submit the approved order
 	rec, err := execEngine.SubmitOrder(ctx, approval)
@@ -173,5 +186,18 @@ func TestOrderLifecycle_ProposalToFill(t *testing.T) {
 		order.TraceID).Scan(&decision)
 	if decision != "approved" {
 		t.Errorf("expected 'approved' decision in DB, got %s", decision)
+	}
+
+	// Verify intent ledger was updated by execution engine
+	intent, err := intentLedger.GetByTraceID(ctx, order.TraceID)
+	if err != nil {
+		t.Fatalf("get intent: %v", err)
+	}
+	if intent == nil {
+		t.Fatal("expected intent in ledger for this order")
+	}
+	t.Logf("Intent: version=%d status=%s", intent.Version, intent.Status)
+	if intent.Status != ledger.IntentFilled {
+		t.Errorf("expected intent status 'filled', got %s", intent.Status)
 	}
 }

@@ -296,6 +296,20 @@ func flagValue(flag, defaultVal string) string {
 	return defaultVal
 }
 
+func printUsage() {
+	fmt.Fprintln(os.Stderr, "Usage: trade-ctl <command> [flags]")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "Commands:")
+	fmt.Fprintln(os.Stderr, "  status   Show system status")
+	fmt.Fprintln(os.Stderr, "  kill     Trigger kill switch (--level, --scope, --reason)")
+	fmt.Fprintln(os.Stderr, "  ack      Acknowledge a halt (--scope, --cause)")
+	fmt.Fprintln(os.Stderr, "  resume   Resume trading (--scope)")
+	fmt.Fprintln(os.Stderr, "  orders   List open orders")
+	fmt.Fprintln(os.Stderr, "  risk     Show risk state")
+	fmt.Fprintln(os.Stderr, "  limits   Show active limits")
+	fmt.Fprintln(os.Stderr, "  policy   Show loaded policy summary")
+}
+
 func envOrDefault(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v

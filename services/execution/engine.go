@@ -9,6 +9,7 @@ import (
 
 	"autonomy-platform/internal/audit"
 	"autonomy-platform/internal/events"
+	"autonomy-platform/internal/ledger"
 	"autonomy-platform/internal/models"
 	"autonomy-platform/services/risk"
 
@@ -56,24 +57,31 @@ type Engine struct {
 	venue     VenueAdapter
 	publisher *events.Publisher
 	auditor   *audit.Logger
+	ledger    *ledger.Ledger
 	hmacKey   []byte
 	logger    *slog.Logger
 
+	exposureLimits ledger.ExposureLimits
+
 	mu          sync.RWMutex
 	openOrders  map[string]*models.OrderRecord // internal_order_id → record
+	intentMap   map[string]uuid.UUID           // internal_order_id → intent_id
 	systemMode  string
 }
 
-func NewEngine(db *pgxpool.Pool, venue VenueAdapter, publisher *events.Publisher, auditor *audit.Logger, hmacKey []byte) *Engine {
+func NewEngine(db *pgxpool.Pool, venue VenueAdapter, publisher *events.Publisher, auditor *audit.Logger, hmacKey []byte, l *ledger.Ledger, limits ledger.ExposureLimits) *Engine {
 	return &Engine{
-		db:         db,
-		venue:      venue,
-		publisher:  publisher,
-		auditor:    auditor,
-		hmacKey:    hmacKey,
-		logger:     slog.Default().With("service", "execution-engine"),
-		openOrders: make(map[string]*models.OrderRecord),
-		systemMode: "normal",
+		db:             db,
+		venue:          venue,
+		publisher:      publisher,
+		auditor:        auditor,
+		ledger:         l,
+		hmacKey:        hmacKey,
+		logger:         slog.Default().With("service", "execution-engine"),
+		exposureLimits: limits,
+		openOrders:     make(map[string]*models.OrderRecord),
+		intentMap:      make(map[string]uuid.UUID),
+		systemMode:     "normal",
 	}
 }
 
@@ -115,6 +123,19 @@ func (e *Engine) LoadOpenOrders(ctx context.Context) error {
 	}
 
 	e.logger.Info("loaded open orders", "count", count)
+
+	// Rebuild intent mappings for open orders by matching trace_id.
+	for _, rec := range e.openOrders {
+		intent, err := e.ledger.GetByTraceID(ctx, rec.TraceID)
+		if err != nil {
+			e.logger.Error("failed to load intent for open order", "trace_id", rec.TraceID, "error", err)
+			continue
+		}
+		if intent != nil {
+			e.intentMap[rec.InternalOrderID.String()] = intent.IntentID
+		}
+	}
+
 	return nil
 }
 
@@ -142,7 +163,15 @@ func (e *Engine) SubmitOrder(ctx context.Context, approval *risk.Approval) (*mod
 	internalID := uuid.New()
 	now := time.Now().UTC()
 
-	// Step 4: Build idempotency key and persist order
+	// Step 4: Record intent in the ledger before any venue interaction.
+	// This ensures exposure tracking is accurate even if submission fails.
+	newIntent := ledger.NewIntentFromApproval(order, approval.HMACSignature)
+	intent, err := e.ledger.Append(ctx, newIntent, e.exposureLimits)
+	if err != nil {
+		return nil, fmt.Errorf("record intent: %w", err)
+	}
+
+	// Step 5: Build idempotency key and persist order
 	idempKey := fmt.Sprintf("%s:%s", order.TraceID, order.IdempotencyKey())
 
 	rec := &models.OrderRecord{
@@ -164,7 +193,7 @@ func (e *Engine) SubmitOrder(ctx context.Context, approval *risk.Approval) (*mod
 		CreatedAt:       now,
 	}
 
-	_, err := e.db.Exec(ctx,
+	_, err = e.db.Exec(ctx,
 		`INSERT INTO execution.orders
 		 (internal_order_id, trace_id, strategy_id, venue, market_id, side,
 		  quantity, price_micros, notional_micros, status, credential_id,
@@ -176,14 +205,14 @@ func (e *Engine) SubmitOrder(ctx context.Context, approval *risk.Approval) (*mod
 		order.ProposedAt, approval.DecidedAt, idempKey,
 	)
 	if err != nil {
-		// Check if it's a duplicate (unique constraint on idempotency_key)
 		return nil, fmt.Errorf("persist order: %w", err)
 	}
 
-	// Step 5: Submit to venue
+	// Step 6: Submit to venue
 	ack, err := e.venue.SubmitOrder(ctx, order, internalID.String())
 	if err != nil {
 		e.transitionOrder(ctx, rec, models.StatusFailed)
+		e.ledger.UpdateStatus(ctx, intent.IntentID, ledger.IntentRejected)
 		return rec, fmt.Errorf("venue submit: %w", err)
 	}
 
@@ -193,16 +222,19 @@ func (e *Engine) SubmitOrder(ctx context.Context, approval *risk.Approval) (*mod
 
 	if ack.Status == "rejected" {
 		e.transitionOrder(ctx, rec, models.StatusRejected)
+		e.ledger.UpdateStatus(ctx, intent.IntentID, ledger.IntentRejected)
 		e.auditor.LogWarn(ctx, "order.rejected", order.TraceID, map[string]interface{}{
 			"reason": ack.RejectReason,
 		})
 		return rec, nil
 	}
 
-	// Order is now open on the exchange
+	// Order is now open on the exchange — update intent to open
 	e.transitionOrder(ctx, rec, models.StatusOpen)
+	e.ledger.UpdateStatus(ctx, intent.IntentID, ledger.IntentOpen)
 	e.mu.Lock()
 	e.openOrders[internalID.String()] = rec
+	e.intentMap[internalID.String()] = intent.IntentID
 	e.mu.Unlock()
 
 	e.publisher.Publish(events.SubjectOrderSubmitted+"."+order.Venue, events.OrderSubmittedEvent{
@@ -240,8 +272,13 @@ func (e *Engine) CancelOrder(ctx context.Context, internalOrderID, reason, cance
 
 	e.transitionOrder(ctx, rec, models.StatusCancelled)
 	e.mu.Lock()
+	intentID, hasIntent := e.intentMap[internalOrderID]
 	delete(e.openOrders, internalOrderID)
+	delete(e.intentMap, internalOrderID)
 	e.mu.Unlock()
+	if hasIntent {
+		e.ledger.UpdateStatus(ctx, intentID, ledger.IntentCancelled)
+	}
 
 	e.publisher.Publish(events.SubjectOrderCancelled+"."+rec.Venue, events.OrderCancelledEvent{
 		TraceID:         rec.TraceID,
@@ -264,6 +301,10 @@ func (e *Engine) CancelAll(ctx context.Context, reason, cancelledBy string) (int
 	e.mu.Lock()
 	for id, rec := range e.openOrders {
 		e.transitionOrder(ctx, rec, models.StatusCancelled)
+		if intentID, ok := e.intentMap[id]; ok {
+			e.ledger.UpdateStatus(ctx, intentID, ledger.IntentCancelled)
+			delete(e.intentMap, id)
+		}
 		delete(e.openOrders, id)
 	}
 	e.mu.Unlock()
@@ -330,8 +371,13 @@ func (e *Engine) processFill(ctx context.Context, f *ExchangeFill, riskCallback 
 	if rec.FilledQuantity >= rec.Quantity {
 		e.transitionOrder(ctx, rec, models.StatusFilled)
 		e.mu.Lock()
+		intentID, hasIntent := e.intentMap[rec.InternalOrderID.String()]
 		delete(e.openOrders, rec.InternalOrderID.String())
+		delete(e.intentMap, rec.InternalOrderID.String())
 		e.mu.Unlock()
+		if hasIntent {
+			e.ledger.UpdateStatus(ctx, intentID, ledger.IntentFilled)
+		}
 	} else {
 		e.transitionOrder(ctx, rec, models.StatusPartiallyFilled)
 	}

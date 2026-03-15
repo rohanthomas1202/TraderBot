@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"autonomy-platform/internal/audit"
+	"autonomy-platform/internal/ledger"
 	"autonomy-platform/internal/models"
 	"autonomy-platform/services/execution"
+	"autonomy-platform/services/mockexchange"
 	"autonomy-platform/services/risk"
 
 	"github.com/google/uuid"
@@ -58,9 +60,18 @@ func TestRecovery_OpenOrdersSurviveRestart(t *testing.T) {
 		t.Fatalf("expected approval, got %s", approval.Decision)
 	}
 
-	// Use a mock adapter that does NOT auto-fill (so order stays open)
-	venue := execution.NewMockAdapter("localhost:50060")
-	execEngine1 := execution.NewEngine(db, venue, pub, auditor, hmacKey)
+	// Use a paper adapter that does NOT auto-fill (so order stays open)
+	venue := execution.NewPaperAdapter(mockexchange.Config{
+		FillDelayMs:     999999, // very long delay = no fill during test
+		FillProbability: 0.0,
+		InitialBalanceMicros: 100_000_000_000,
+	})
+	intentLedger := ledger.NewLedger(db)
+	limits := ledger.ExposureLimits{
+		MaxPositionNotionalMicros: 10_000_000_000,
+		MaxTotalExposureMicros:    50_000_000_000,
+	}
+	execEngine1 := execution.NewEngine(db, venue, pub, auditor, hmacKey, intentLedger, limits)
 	rec, err := execEngine1.SubmitOrder(ctx, approval)
 	if err != nil {
 		t.Fatalf("submit: %v", err)
@@ -72,7 +83,7 @@ func TestRecovery_OpenOrdersSurviveRestart(t *testing.T) {
 	db.Exec(ctx, `UPDATE execution.orders SET status = 'open' WHERE trace_id = $1`, order.TraceID)
 
 	// Simulate restart: create a NEW execution engine
-	execEngine2 := execution.NewEngine(db, venue, pub, auditor, hmacKey)
+	execEngine2 := execution.NewEngine(db, venue, pub, auditor, hmacKey, intentLedger, limits)
 	err = execEngine2.LoadOpenOrders(ctx)
 	if err != nil {
 		t.Fatalf("load open orders: %v", err)

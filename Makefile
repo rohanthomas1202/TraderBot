@@ -1,4 +1,4 @@
-.PHONY: all build test dev up down migrate status kill ack resume orders risk proto audit trace config ledger
+.PHONY: all build test dev up down migrate status kill ack resume orders risk proto audit trace config ledger test-certification test-report
 
 # ─── Protobuf ───
 
@@ -46,6 +46,8 @@ down:
 migrate:
 	@echo "Running migrations..."
 	docker compose exec -T postgres psql -U trader -d autonomy -f /docker-entrypoint-initdb.d/001_initial.up.sql 2>/dev/null || true
+	docker compose exec -T postgres psql -U trader -d autonomy -f /docker-entrypoint-initdb.d/002_order_intent_ledger.up.sql 2>/dev/null || true
+	docker compose exec -T postgres psql -U trader -d autonomy -f /docker-entrypoint-initdb.d/003_recon_snapshots.up.sql 2>/dev/null || true
 	@echo "Migrations complete."
 
 migrate-down:
@@ -64,6 +66,14 @@ test-integration: up migrate
 
 test-race:
 	go test ./... -race -count=1
+
+test-certification: up migrate
+	@echo "Running Phase 10 certification tests..."
+	go test ./tests/integration/... -v -count=1 -tags=integration -run "TestCert_" -timeout 10m
+
+test-report: up migrate
+	@echo "Generating paper trading certification report..."
+	go test ./tests/integration/... -v -count=1 -tags=integration -run "TestCert_PaperTradingReport" -timeout 5m
 
 # ─── Operator CLI shortcuts ───
 

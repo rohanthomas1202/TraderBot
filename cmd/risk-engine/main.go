@@ -2,14 +2,17 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"autonomy-platform/internal/audit"
 	"autonomy-platform/internal/config"
 	"autonomy-platform/internal/events"
+	"autonomy-platform/internal/models"
 	"autonomy-platform/services/risk"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -66,13 +69,52 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Subscribe to market data events to update freshness cache
+	subscriber, err := events.NewSubscriber(nc)
+	if err != nil {
+		logger.Error("failed to create event subscriber", "error", err)
+		os.Exit(1)
+	}
+
+	_, err = subscriber.Subscribe(events.SubjectMarketData+".>", "risk-engine-market-data", func(msg *nats.Msg) {
+		var mde events.MarketDataEvent
+		if err := json.Unmarshal(msg.Data, &mde); err != nil {
+			logger.Error("failed to unmarshal market data event", "error", err)
+			msg.Nak()
+			return
+		}
+
+		engine.UpdateMarketData(&models.MarketData{
+			Venue:           mde.Venue,
+			MarketID:        mde.MarketID,
+			BidPriceMicros:  mde.BidPriceMicros,
+			AskPriceMicros:  mde.AskPriceMicros,
+			LastPriceMicros: mde.LastPriceMicros,
+			BidDepth:        mde.BidDepth,
+			AskDepth:        mde.AskDepth,
+			UpdatedAt:       mde.Timestamp,
+		})
+
+		logger.Debug("market data updated",
+			"venue", mde.Venue,
+			"market_id", mde.MarketID,
+			"mid", (mde.BidPriceMicros+mde.AskPriceMicros)/2,
+			"age_ms", time.Since(mde.Timestamp).Milliseconds(),
+		)
+
+		msg.Ack()
+	})
+	if err != nil {
+		logger.Error("failed to subscribe to market data", "error", err)
+		os.Exit(1)
+	}
+
 	logger.Info("risk engine ready",
 		"mode", policy.Mode,
 		"system_mode", engine.GetState().SystemMode,
 	)
 
 	// TODO: start gRPC server to accept EvaluateOrder, GetRiskState, ReportFill calls
-	// TODO: subscribe to market data events to update internal cache
 	// For now, wait for shutdown signal
 
 	<-ctx.Done()

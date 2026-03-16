@@ -55,17 +55,20 @@ class EMOSModel(ForecastModel):
     (e.g., "Will NYC high temperature exceed 85F on March 20?").
     """
 
-    def __init__(self, model_version: str = "weather-emos-v1"):
+    def __init__(self, model_version: str = "weather-emos-v1", constant_sigma: bool = False):
         self._version = model_version
+        self.constant_sigma = constant_sigma
         # NGR parameters: mu = a + b1*gfs_mean + b2*ecmwf_mean
-        #                 sigma = c + d*ensemble_spread
+        #                 sigma = c + d*ensemble_spread  (d unused when constant_sigma=True)
         self.params = {
             "a": 0.0,       # intercept
             "b_gfs": 0.8,   # GFS weight
             "b_ecmwf": 0.2, # ECMWF weight
             "c": 1.0,       # sigma intercept
-            "d": 0.5,       # spread scaling
+            "d": 0.5,       # spread scaling (fixed to 0 in constant_sigma mode)
         }
+        if self.constant_sigma:
+            self.params["d"] = 0.0
         self.calibrator = IsotonicCalibrator()
         self._trained = False
 
@@ -91,15 +94,18 @@ class EMOSModel(ForecastModel):
             + self.params["b_ecmwf"] * ecmwf_mean
         )
 
-        # Use combined spread from both ensembles
-        combined_spread = gfs_spread
-        if ecmwf_spread is not None:
-            combined_spread = np.sqrt(gfs_spread**2 + ecmwf_spread**2) / np.sqrt(2)
+        if self.constant_sigma:
+            sigma = max(self.params["c"], SIGMA_FLOOR_F)
+        else:
+            # Use combined spread from both ensembles
+            combined_spread = gfs_spread
+            if ecmwf_spread is not None:
+                combined_spread = np.sqrt(gfs_spread**2 + ecmwf_spread**2) / np.sqrt(2)
 
-        sigma = max(
-            self.params["c"] + self.params["d"] * combined_spread,
-            SIGMA_FLOOR_F,
-        )
+            sigma = max(
+                self.params["c"] + self.params["d"] * combined_spread,
+                SIGMA_FLOOR_F,
+            )
 
         return mu, sigma
 

@@ -101,10 +101,12 @@ def fetch_gefs_reforecast_point(
                     member_id = f"gep{member_idx:02d}"
 
                 # NOMADS filter endpoint for point extraction
+                # NOMADS CGI uses checkbox-style params: var_TMP=on, lev_2_m_above_ground=on
+                lev_key = var_info["level"].replace(" ", "_")
                 params = {
                     "file": f"{member_id}.t{cycle}z.pgrb2s.0p25.f{lead_h:03d}",
-                    "var": var_info["var"],
-                    "lev": var_info["level"],
+                    f"var_{var_info['var']}": "on",
+                    f"lev_{lev_key}": "on",
                     "subregion": "",
                     "toplat": station.lat + 0.125,
                     "leftlon": (station.lon % 360) - 0.125,

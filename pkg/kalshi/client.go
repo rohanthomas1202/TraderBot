@@ -121,6 +121,11 @@ func (c *Client) signRequest(req *http.Request, timestampMs string) error {
 	return nil
 }
 
+// DoGetPublic is an exported wrapper around doGet for debugging.
+func (c *Client) DoGetPublic(ctx context.Context, path string, result interface{}) error {
+	return c.doGet(ctx, path, result)
+}
+
 // doGet performs an authenticated, rate-limited GET request.
 func (c *Client) doGet(ctx context.Context, path string, result interface{}) error {
 	if err := c.limiter.Wait(ctx); err != nil {
@@ -162,11 +167,26 @@ func (c *Client) doGet(ctx context.Context, path string, result interface{}) err
 }
 
 // Market represents a Kalshi market.
+// Kalshi API returns prices as dollar strings (e.g. "0.0900").
+// We parse them and expose convenience methods for cent values.
 type Market struct {
-	Ticker         string `json:"ticker"`
-	Title          string `json:"title"`
-	Subtitle       string `json:"subtitle"`
-	Status         string `json:"status"` // "open", "closed", "settled"
+	Ticker               string `json:"ticker"`
+	Title                string `json:"title"`
+	Subtitle             string `json:"subtitle"`
+	Status               string `json:"status"` // "active", "closed", "settled"
+	EventTicker          string `json:"event_ticker"`
+	YesBidDollars        string `json:"yes_bid_dollars"`
+	YesAskDollars        string `json:"yes_ask_dollars"`
+	NoBidDollars         string `json:"no_bid_dollars"`
+	NoAskDollars         string `json:"no_ask_dollars"`
+	LastPriceDollars     string `json:"last_price_dollars"`
+	VolumeFP             string `json:"volume_fp"`
+	Volume24hFP          string `json:"volume_24h_fp"`
+	OpenInterestFP       string `json:"open_interest_fp"`
+	PreviousPriceDollars string `json:"previous_price_dollars"`
+	LiquidityDollars     string `json:"liquidity_dollars"`
+
+	// Legacy fields for backwards compat with tests
 	YesBid         int    `json:"yes_bid"`
 	YesAsk         int    `json:"yes_ask"`
 	NoBid          int    `json:"no_bid"`
@@ -178,6 +198,42 @@ type Market struct {
 	PreviousYesBid int    `json:"previous_yes_bid"`
 	PreviousYesAsk int    `json:"previous_yes_ask"`
 	PreviousPrice  int    `json:"previous_price"`
+}
+
+// DollarsToCents parses a dollar string like "0.0900" to cents (9).
+func DollarsToCents(dollars string) int {
+	if dollars == "" || dollars == "0.0000" {
+		return 0
+	}
+	f, err := strconv.ParseFloat(dollars, 64)
+	if err != nil {
+		return 0
+	}
+	return int(f * 100)
+}
+
+// YesBidCents returns the yes bid in cents.
+func (m *Market) YesBidCents() int {
+	if c := DollarsToCents(m.YesBidDollars); c > 0 {
+		return c
+	}
+	return m.YesBid
+}
+
+// YesAskCents returns the yes ask in cents.
+func (m *Market) YesAskCents() int {
+	if c := DollarsToCents(m.YesAskDollars); c > 0 {
+		return c
+	}
+	return m.YesAsk
+}
+
+// LastPriceCents returns the last price in cents.
+func (m *Market) LastPriceCents() int {
+	if c := DollarsToCents(m.LastPriceDollars); c > 0 {
+		return c
+	}
+	return m.LastPrice
 }
 
 // Orderbook represents a Kalshi market orderbook.

@@ -1,0 +1,44 @@
+[
+  {
+    "date": "2026-02-23",
+    "tmax_f": 35.0,
+    "tmin_f": 28.0,
+    "precip_in": 1.06,
+    "station_icao": "KJFK"
+  },
+  {
+    "date": "2026-02-24",
+    "tmax_f": 31.0,
+    "tmin_f": 23.0,
+    "precip_in": 0.0,
+    "station_icao": "KJFK"
+  },
+  {
+    "date": "2026-02-25",
+    "tmax_f": 44.0,
+    "tmin_f": 26.0,
+    "precip_in": 0.09,
+    "station_icao": "KJFK"
+  },
+  {
+    "date": "2026-02-26",
+    "tmax_f": 49.0,
+    "tmin_f": 35.0,
+    "precip_in": 0.0,
+    "station_icao": "KJFK"
+  },
+  {
+    "date": "2026-02-27",
+    "tmax_f": 44.0,
+    "tmin_f": 29.0,
+    "precip_in": 0.0,
+    "station_icao": "KJFK"
+  },
+  {
+    "date": "2026-02-28",
+    "tmax_f": 54.0,
+    "tmin_f": 33.0,
+    "precip_in": 0.0,
+    "station_icao": "KJFK"
+  }
+]

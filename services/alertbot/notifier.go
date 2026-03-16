@@ -2,6 +2,7 @@ package alertbot
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -18,6 +19,11 @@ type ChatGroups struct {
 	Alerts []int64 // denied, kill switch
 }
 
+const (
+	batchSize     = 500
+	batchInterval = 1 * time.Minute
+)
+
 // Notifier subscribes to NATS events and pushes Telegram notifications.
 type Notifier struct {
 	bot    *tgbotapi.BotAPI
@@ -25,9 +31,9 @@ type Notifier struct {
 	groups ChatGroups
 	logger *slog.Logger
 
-	mu        sync.Mutex
-	lastSent  map[string]time.Time // event type → last send time
-	cooldowns map[string]time.Duration
+	mu       sync.Mutex
+	proposed []events.OrderProposedEvent
+	denied   []events.OrderDeniedEvent
 }
 
 // NewNotifier creates a push notifier. If groups has empty Trades or Alerts,
@@ -44,15 +50,6 @@ func NewNotifier(bot *tgbotapi.BotAPI, sub *events.Subscriber, chatIDs []int64, 
 		sub:    sub,
 		groups: groups,
 		logger: logger,
-		lastSent: make(map[string]time.Time),
-		cooldowns: map[string]time.Duration{
-			"order.proposed":  0, // immediate
-			"order.approved":  0,
-			"order.denied":    0,
-			"order.submitted": 0,
-			"order.filled":    0,
-			"kill.activated":  0,
-		},
 	}
 }
 
@@ -78,27 +75,70 @@ func (n *Notifier) Start() error {
 		}
 		n.logger.Info("notifier subscribed", "subject", s.subject)
 	}
+
+	// Start batch flush ticker
+	go n.batchFlusher()
+
 	return nil
 }
 
-func (n *Notifier) throttled(eventType string) bool {
+// batchFlusher periodically flushes accumulated proposed/denied events.
+func (n *Notifier) batchFlusher() {
+	ticker := time.NewTicker(batchInterval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		n.flushProposed()
+		n.flushDenied()
+	}
+}
+
+func (n *Notifier) flushProposed() {
 	n.mu.Lock()
-	defer n.mu.Unlock()
+	batch := n.proposed
+	n.proposed = nil
+	n.mu.Unlock()
 
-	cooldown, ok := n.cooldowns[eventType]
-	if !ok {
-		cooldown = 5 * time.Second
-	}
-	if cooldown == 0 {
-		return false
+	if len(batch) == 0 {
+		return
 	}
 
-	last, ok := n.lastSent[eventType]
-	if ok && time.Since(last) < cooldown {
-		return true
+	// Group by market
+	byMarket := make(map[string]int)
+	for _, e := range batch {
+		byMarket[e.MarketID]++
 	}
-	n.lastSent[eventType] = time.Now()
-	return false
+
+	msg := fmt.Sprintf("🟡 %d Orders Proposed\n", len(batch))
+	for market, count := range byMarket {
+		msg += fmt.Sprintf("  %s: %d\n", market, count)
+	}
+
+	n.broadcastTrades(msg)
+}
+
+func (n *Notifier) flushDenied() {
+	n.mu.Lock()
+	batch := n.denied
+	n.denied = nil
+	n.mu.Unlock()
+
+	if len(batch) == 0 {
+		return
+	}
+
+	// Group by reason
+	byReason := make(map[string]int)
+	for _, e := range batch {
+		byReason[e.DenyReason]++
+	}
+
+	msg := fmt.Sprintf("❌ %d Orders Denied\n", len(batch))
+	for reason, count := range byReason {
+		msg += fmt.Sprintf("  %s: %d\n", reason, count)
+	}
+
+	n.broadcastAlerts(msg)
 }
 
 func (n *Notifier) broadcastTo(chatIDs []int64, text string) {
@@ -115,48 +155,47 @@ func (n *Notifier) broadcastAlerts(text string) { n.broadcastTo(n.groups.Alerts,
 
 func (n *Notifier) handleProposed(msg *nats.Msg) {
 	_ = msg.Ack()
-	if n.throttled("order.proposed") {
-		return
-	}
 	var e events.OrderProposedEvent
 	if err := json.Unmarshal(msg.Data, &e); err != nil {
 		n.logger.Error("failed to unmarshal proposed event", "error", err)
 		return
 	}
-	n.broadcastTrades(FormatOrderProposed(e))
+
+	n.mu.Lock()
+	n.proposed = append(n.proposed, e)
+	shouldFlush := len(n.proposed) >= batchSize
+	n.mu.Unlock()
+
+	if shouldFlush {
+		n.flushProposed()
+	}
 }
 
 func (n *Notifier) handleApproved(msg *nats.Msg) {
 	_ = msg.Ack()
-	if n.throttled("order.approved") {
-		return
-	}
-	var e events.OrderApprovedEvent
-	if err := json.Unmarshal(msg.Data, &e); err != nil {
-		n.logger.Error("failed to unmarshal approved event", "error", err)
-		return
-	}
-	n.broadcastTrades(FormatOrderApproved(e))
+	// Approved events are silent — the fill notification is what matters
 }
 
 func (n *Notifier) handleDenied(msg *nats.Msg) {
 	_ = msg.Ack()
-	if n.throttled("order.denied") {
-		return
-	}
 	var e events.OrderDeniedEvent
 	if err := json.Unmarshal(msg.Data, &e); err != nil {
 		n.logger.Error("failed to unmarshal denied event", "error", err)
 		return
 	}
-	n.broadcastAlerts(FormatOrderDenied(e))
+
+	n.mu.Lock()
+	n.denied = append(n.denied, e)
+	shouldFlush := len(n.denied) >= batchSize
+	n.mu.Unlock()
+
+	if shouldFlush {
+		n.flushDenied()
+	}
 }
 
 func (n *Notifier) handleSubmitted(msg *nats.Msg) {
 	_ = msg.Ack()
-	if n.throttled("order.submitted") {
-		return
-	}
 	var e events.OrderSubmittedEvent
 	if err := json.Unmarshal(msg.Data, &e); err != nil {
 		n.logger.Error("failed to unmarshal submitted event", "error", err)
@@ -167,9 +206,6 @@ func (n *Notifier) handleSubmitted(msg *nats.Msg) {
 
 func (n *Notifier) handleFill(msg *nats.Msg) {
 	_ = msg.Ack()
-	if n.throttled("order.filled") {
-		return
-	}
 	var e events.OrderFilledEvent
 	if err := json.Unmarshal(msg.Data, &e); err != nil {
 		n.logger.Error("failed to unmarshal fill event", "error", err)
@@ -180,9 +216,6 @@ func (n *Notifier) handleFill(msg *nats.Msg) {
 
 func (n *Notifier) handleKill(msg *nats.Msg) {
 	_ = msg.Ack()
-	if n.throttled("kill.activated") {
-		return
-	}
 	var e events.KillSwitchEvent
 	if err := json.Unmarshal(msg.Data, &e); err != nil {
 		n.logger.Error("failed to unmarshal kill event", "error", err)

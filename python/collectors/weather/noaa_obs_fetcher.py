@@ -1,24 +1,27 @@
 """
-NOAA ISD (Integrated Surface Database) Observations Fetcher
+NOAA GHCND (Global Historical Climatology Network Daily) Observations Fetcher
 
-Downloads historical weather observations from NOAA's ISD dataset.
+Downloads historical daily weather observations from NOAA's GHCND dataset.
 These are the ground-truth values used to train and evaluate the EMOS model.
 
-Data source: NOAA ISD Lite
-- URL: https://www.ncei.noaa.gov/data/global-hourly/access/
-- Also available in ISD-Lite (simplified) format
+Data source: NOAA GHCND via NCEI web services
+- URL: https://www.ncei.noaa.gov/access/services/data/v1
+- Dataset: daily-summaries
 - Free, no auth required
-- Hourly observations from major airport weather stations
+- Daily observations from major airport weather stations
+- Data lag: ~14 days from present
+
+Previously used LCD (Local Climatological Data), but LCD station IDs
+are unreliable and return empty results. GHCND is the standard source
+for daily summary observations.
 """
 
-import csv
 import io
 import logging
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import requests
 
@@ -26,45 +29,45 @@ from collectors.weather.stations import STATIONS, Station
 
 logger = logging.getLogger(__name__)
 
-# NOAA ISD-Lite base URL (simpler format, easier to parse)
-ISD_LITE_BASE = "https://www.ncei.noaa.gov/data/global-hourly/access"
-
-# NOAA LCD (Local Climatological Data) — better for daily summary stats
-LCD_BASE = "https://www.ncei.noaa.gov/access/services/data/v1"
+# NOAA NCEI web services base URL
+NCEI_BASE = "https://www.ncei.noaa.gov/access/services/data/v1"
 
 
-def fetch_lcd_observations(
+def fetch_ghcnd_observations(
     station: Station,
     start_date: datetime,
     end_date: datetime,
     session: requests.Session | None = None,
 ) -> pd.DataFrame | None:
     """
-    Fetch Local Climatological Data (LCD) from NOAA for a station.
+    Fetch daily observations from NOAA GHCND for a station.
 
-    LCD provides daily summary statistics including max/min temperature
-    and precipitation totals, which directly map to Kalshi contract
-    resolution criteria.
+    GHCND provides daily max/min temperature and precipitation totals,
+    which directly map to Kalshi contract resolution criteria.
 
     Returns DataFrame with daily observations or None on failure.
     """
     if session is None:
         session = requests.Session()
 
+    ghcnd_id = station.ghcnd_id
+    if not ghcnd_id:
+        # Derive from ISD station ID: USAF-WBAN → USW000{WBAN}
+        _, wban = station.isd_station_id.split("-")
+        ghcnd_id = f"USW000{wban}"
+
     params = {
-        "dataset": "local-climatological-data",
-        "stations": station.isd_station_id,
-        "startDate": start_date.strftime("%Y-%m-%dT00:00:00"),
-        "endDate": end_date.strftime("%Y-%m-%dT23:59:59"),
+        "dataset": "daily-summaries",
+        "stations": ghcnd_id,
+        "startDate": start_date.strftime("%Y-%m-%d"),
+        "endDate": end_date.strftime("%Y-%m-%d"),
         "format": "csv",
-        "dataTypes": "DailyMaximumDryBulbTemperature,DailyMinimumDryBulbTemperature,"
-                     "DailyPrecipitation,DailyAverageDryBulbTemperature,"
-                     "DailyDepartureFromNormalAverageTemperature",
+        "dataTypes": "TMAX,TMIN,PRCP,TAVG",
         "units": "standard",  # Fahrenheit for temp, inches for precip
     }
 
     try:
-        resp = session.get(LCD_BASE, params=params, timeout=60)
+        resp = session.get(NCEI_BASE, params=params, timeout=90)
         resp.raise_for_status()
 
         if not resp.text.strip():
@@ -73,34 +76,30 @@ def fetch_lcd_observations(
 
         df = pd.read_csv(io.StringIO(resp.text), low_memory=False)
 
-        if df.empty:
+        if df.empty or len(df) == 0:
             logger.warning("No data returned for station %s", station.icao)
             return None
 
-        # Normalize column names
+        # Normalize column names to match data_loader.py expectations
         col_map = {
             "DATE": "date",
             "STATION": "station_id",
-            "DailyMaximumDryBulbTemperature": "tmax_f",
-            "DailyMinimumDryBulbTemperature": "tmin_f",
-            "DailyPrecipitation": "precip_in",
-            "DailyAverageDryBulbTemperature": "tavg_f",
-            "DailyDepartureFromNormalAverageTemperature": "temp_departure_f",
+            "TMAX": "tmax_f",
+            "TMIN": "tmin_f",
+            "PRCP": "precip_in",
+            "TAVG": "tavg_f",
         }
 
         available_cols = {k: v for k, v in col_map.items() if k in df.columns}
         df = df[list(available_cols.keys())].rename(columns=available_cols)
 
-        # Parse date
-        df["date"] = pd.to_datetime(df["date"]).dt.date.astype(str)
+        # Parse date to YYYY-MM-DD string (matches GFS and ECMWF format)
+        df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
 
-        # Convert numeric columns, handling "T" (trace) and "s" (suspect) flags
-        for col in ["tmax_f", "tmin_f", "precip_in", "tavg_f", "temp_departure_f"]:
+        # Convert numeric columns (GHCND is cleaner than LCD but still needs coercion)
+        for col in ["tmax_f", "tmin_f", "precip_in", "tavg_f"]:
             if col in df.columns:
-                df[col] = pd.to_numeric(
-                    df[col].astype(str).str.replace(r"[sTM*]", "", regex=True),
-                    errors="coerce",
-                )
+                df[col] = pd.to_numeric(df[col], errors="coerce")
 
         # Add station metadata
         df["station_icao"] = station.icao
@@ -111,10 +110,6 @@ def fetch_lcd_observations(
         weather_cols = [c for c in ["tmax_f", "tmin_f", "precip_in"] if c in df.columns]
         df = df.dropna(subset=weather_cols, how="all")
 
-        # Keep one row per date (LCD can have multiple reports per day)
-        if "date" in df.columns:
-            df = df.groupby("date").first().reset_index()
-
         logger.info(
             "Fetched %d daily observations for %s (%s to %s)",
             len(df), station.icao, start_date.date(), end_date.date(),
@@ -122,7 +117,7 @@ def fetch_lcd_observations(
         return df
 
     except requests.RequestException as e:
-        logger.error("Failed to fetch LCD data for %s: %s", station.icao, e)
+        logger.error("Failed to fetch GHCND data for %s: %s", station.icao, e)
         return None
 
 
@@ -158,7 +153,7 @@ def fetch_observations_range(
         while chunk_start < end_date:
             chunk_end = min(chunk_start + timedelta(days=chunk_days), end_date)
 
-            df = fetch_lcd_observations(station, chunk_start, chunk_end, session)
+            df = fetch_ghcnd_observations(station, chunk_start, chunk_end, session)
             if df is not None and not df.empty:
                 all_frames.append(df)
 

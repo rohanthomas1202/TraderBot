@@ -105,43 +105,49 @@ func (ing *Ingestion) pollAllMarkets(ctx context.Context, client *kalshi.Client,
 	}
 }
 
-// pollMarket fetches orderbook data for a single market, converts prices,
+// pollMarket fetches market data for a single market using the /markets/{ticker}
+// endpoint (which returns bid/ask/last as dollar strings), converts prices,
 // and publishes a MarketDataEvent.
 func (ing *Ingestion) pollMarket(ctx context.Context, client *kalshi.Client, m MarketMapping) {
-	ob, err := client.GetOrderbook(ctx, m.KalshiTicker)
+	mkt, err := client.GetMarket(ctx, m.KalshiTicker)
 	if err != nil {
-		ing.logger.Warn("kalshi orderbook fetch failed",
+		ing.logger.Warn("kalshi market fetch failed",
 			"ticker", m.KalshiTicker,
 			"error", err,
 		)
 		return
 	}
 
-	// Extract best bid/ask from the "Yes" side of the orderbook.
-	// Kalshi binary markets: Yes side has bids (buyers) and the
-	// complementary No side implies asks. For simplicity, we use
-	// the Yes orderbook: best bid = highest Yes bid, best ask = lowest Yes ask.
-	bidCents, bidDepth := kalshi.BestBid(ob.Yes)
-	askCents, askDepth := kalshi.BestAsk(ob.No)
+	bidCents := mkt.YesBidCents()
+	askCents := mkt.YesAskCents()
+	lastCents := mkt.LastPriceCents()
 
-	// Skip markets with empty orderbooks
-	if bidCents == 0 && askCents == 0 {
-		ing.logger.Warn("kalshi orderbook empty, skipping",
+	// Skip markets with no price data at all
+	if bidCents == 0 && askCents == 0 && lastCents == 0 {
+		ing.logger.Debug("kalshi market has no prices, skipping",
 			"ticker", m.KalshiTicker,
 			"internal_id", m.InternalID,
 		)
 		return
 	}
 
-	// If only one side exists, use it for both (with a small spread)
-	if bidCents == 0 {
+	// Fill in missing sides from available data
+	if bidCents == 0 && askCents > 0 {
 		bidCents = askCents - 1
 		if bidCents < 1 {
 			bidCents = 1
 		}
 	}
-	if askCents == 0 {
+	if askCents == 0 && bidCents > 0 {
 		askCents = bidCents + 1
+		if askCents > 99 {
+			askCents = 99
+		}
+	}
+	// If we only have last price, derive bid/ask
+	if bidCents == 0 && askCents == 0 && lastCents > 0 {
+		bidCents = lastCents
+		askCents = lastCents + 1
 		if askCents > 99 {
 			askCents = 99
 		}
@@ -159,8 +165,8 @@ func (ing *Ingestion) pollMarket(ctx context.Context, client *kalshi.Client, m M
 		BidPriceMicros:  bidMicros,
 		AskPriceMicros:  askMicros,
 		LastPriceMicros: midMicros,
-		BidDepth:        bidDepth,
-		AskDepth:        askDepth,
+		BidDepth:        1, // market-level data doesn't include depth
+		AskDepth:        1,
 		UpdatedAt:       now,
 	}
 
@@ -174,8 +180,8 @@ func (ing *Ingestion) pollMarket(ctx context.Context, client *kalshi.Client, m M
 		BidPriceMicros:  bidMicros,
 		AskPriceMicros:  askMicros,
 		LastPriceMicros: midMicros,
-		BidDepth:        bidDepth,
-		AskDepth:        askDepth,
+		BidDepth:        1,
+		AskDepth:        1,
 		Timestamp:       now,
 	})
 }

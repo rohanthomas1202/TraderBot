@@ -1,32 +1,29 @@
-# Kalshi Market Mapping — Phase 11 (Shadow Mode)
+# Kalshi Market Mapping — Shadow Mode (real data, paper trading)
 #
 # Maps Kalshi tickers to internal market IDs used by the strategy
 # and risk engines. Update tickers as Kalshi events change.
 #
-# Prices are automatically converted from Kalshi cents (0-100) to
+# Prices are automatically converted from Kalshi dollar strings to
 # internal microdollars (10^-6 USD).
 
 markets:
-  - kalshi_ticker: "KXBTC-25MAR14-T100000"
-    internal_id: "KALSHI-BTC-100K"
-    display_name: "Bitcoin above $100K"
+  - kalshi_ticker: "KXATPMATCH-26MAR17HANVAN-VAN"
+    internal_id: "KALSHI-ATP-HANVAN"
+    display_name: "ATP Miami: Van de Zandschulp wins"
     enabled: true
 
-  - kalshi_ticker: "KXFED-25MAR19-T425"
-    internal_id: "KALSHI-FED-RATE-CUT"
-    display_name: "Fed rate cut March 2025"
+  - kalshi_ticker: "KXATPMATCH-26MAR17HANVAN-HAN"
+    internal_id: "KALSHI-ATP-HANVAN-HAN"
+    display_name: "ATP Miami: Haneishi wins"
     enabled: true
 
-  - kalshi_ticker: "KXWEATHER-NYC-RAIN-25MAR16"
-    internal_id: "KALSHI-RAIN-NYC"
-    display_name: "Rain in NYC tomorrow"
+  - kalshi_ticker: "KXWTAMATCH-26MAR17ZAKSRA-ZAK"
+    internal_id: "KALSHI-WTA-ZAKSRA"
+    display_name: "WTA Miami: Zakharova wins"
     enabled: true
 
-# Polling interval for orderbook fetches (milliseconds).
-# With 3 markets and 10 req/sec rate limit, each cycle takes ~300ms.
-poll_interval_ms: 1000
+# Polling interval for market fetches (milliseconds).
+poll_interval_ms: 2000
 
-# API base URL. Use demo for testing, production for real data.
-# Demo: https://demo-api.kalshi.co/trade-api/v2
-# Prod: https://api.elections.kalshi.com/trade-api/v2
-api_base_url: "https://demo-api.kalshi.co/trade-api/v2"
+# API base URL.
+api_base_url: "https://api.elections.kalshi.com/trade-api/v2"

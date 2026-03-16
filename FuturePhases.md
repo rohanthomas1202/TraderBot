@@ -4,7 +4,7 @@ These phases are additive features to be built after the core platform (Phases 1
 
 ---
 
-## Phase F1: Real-Time Web Dashboard
+## Phase F1: Real-Time Web Dashboard — DONE
 
 ### Goal
 A browser-based dashboard providing a single-screen overview of the entire system: live P&L, positions, exposure, order flow, risk state, and kill switch controls.
@@ -41,7 +41,7 @@ Trading doesn't stop when you step away. Critical alerts need to reach you immed
 
 ---
 
-## Phase F3: Strategy Backtesting Engine
+## Phase F3: Strategy Backtesting Engine — DONE
 
 ### Goal
 Replay historical market data through the real risk engine and strategy code. Same code path as live trading — no separate backtest framework.
@@ -78,7 +78,7 @@ Discretionary signals don't scale. ML models can process more data and react fas
 
 ---
 
-## Phase F5: Grafana + Prometheus Observability
+## Phase F5: Grafana + Prometheus Observability — DONE
 
 ### Goal
 Production-grade monitoring with metrics, alerting, and pre-built dashboards.
@@ -95,7 +95,7 @@ You can't improve what you can't measure. Alerting catches degradation before it
 
 ---
 
-## Phase F6: Chaos Testing Framework
+## Phase F6: Chaos Testing Framework — DONE
 
 ### Goal
 Automated fault injection to prove the system recovers gracefully from infrastructure failures.

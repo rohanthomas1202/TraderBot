@@ -36,7 +36,7 @@ type PositionRow struct {
 
 // AuditEntry represents a row from audit.event_log.
 type AuditEntry struct {
-	ID        int64     `json:"id"`
+	ID        string    `json:"id"`
 	Service   string    `json:"service"`
 	EventType string    `json:"event_type"`
 	TraceID   string    `json:"trace_id"`
@@ -144,7 +144,7 @@ func QueryPositions(ctx context.Context, db *pgxpool.Pool) ([]PositionRow, error
 // QueryRecentAudit returns the most recent audit log entries.
 func QueryRecentAudit(ctx context.Context, db *pgxpool.Pool, limit int) ([]AuditEntry, error) {
 	rows, err := db.Query(ctx,
-		`SELECT id, service, event_type, COALESCE(trace_id, ''), severity, timestamp
+		`SELECT id::text, service, event_type, COALESCE(trace_id::text, ''), severity, timestamp
 		 FROM audit.event_log
 		 ORDER BY id DESC
 		 LIMIT $1`, limit)

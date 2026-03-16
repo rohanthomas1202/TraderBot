@@ -371,6 +371,8 @@ def main():
     parser.add_argument("--variable", default="tmax", choices=["tmax", "tmin", "precip", "temp"])
     parser.add_argument("--lead-hours", type=int, default=24)
     parser.add_argument("--min-edge", type=float, default=DEFAULT_MIN_EDGE)
+    parser.add_argument("--constant-sigma", action="store_true",
+                        help="Use constant-sigma EMOS (no ensemble spread term)")
     parser.add_argument("--save-model", default="models/weather_emos_v1.pkl")
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args()
@@ -381,7 +383,7 @@ def main():
     )
 
     loader = WeatherDataLoader(args.data_dir).load()
-    model = EMOSModel()
+    model = EMOSModel(constant_sigma=args.constant_sigma)
 
     runner = BacktestRunner(model, loader, min_edge=args.min_edge)
     result = runner.run(

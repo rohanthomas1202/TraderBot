@@ -188,52 +188,72 @@ class EMOSModel(ForecastModel):
         logger.info("Training EMOS on %d samples", n)
 
         # Step 1: Optimize NGR parameters via CRPS minimization
-        def crps_loss(params):
-            a, b_gfs, b_ecmwf, c, d = params
-            total_crps = 0.0
-            for i in range(n):
-                mu = a + b_gfs * gfs_means[i] + b_ecmwf * ecmwf_means[i]
-                sigma = max(c + d * gfs_stds[i], SIGMA_FLOOR_F)
-                total_crps += _crps_gaussian(mu, sigma, observations[i])
-            return total_crps / n
+        if self.constant_sigma:
+            # 4-parameter model: d is fixed to 0 (no spread term)
+            def crps_loss(params):
+                a, b_gfs, b_ecmwf, c = params
+                total_crps = 0.0
+                for i in range(n):
+                    mu = a + b_gfs * gfs_means[i] + b_ecmwf * ecmwf_means[i]
+                    sigma = max(c, SIGMA_FLOOR_F)
+                    total_crps += _crps_gaussian(mu, sigma, observations[i])
+                return total_crps / n
 
-        x0 = [
-            self.params["a"],
-            self.params["b_gfs"],
-            self.params["b_ecmwf"],
-            self.params["c"],
-            self.params["d"],
-        ]
+            x0 = [self.params["a"], self.params["b_gfs"], self.params["b_ecmwf"], self.params["c"]]
+            bounds = [(-20, 20), (0, 2), (0, 2), (0.1, 10)]
 
-        # Bounds: sigma components must be positive
-        bounds = [
-            (-20, 20),   # a (intercept)
-            (0, 2),      # b_gfs
-            (0, 2),      # b_ecmwf
-            (0.1, 10),   # c (sigma intercept)
-            (0, 3),      # d (spread scaling)
-        ]
-
-        result = optimize.minimize(
-            crps_loss,
-            x0,
-            method="L-BFGS-B",
-            bounds=bounds,
-            options={"maxiter": 1000, "ftol": 1e-8},
-        )
-
-        if result.success:
-            self.params["a"] = result.x[0]
-            self.params["b_gfs"] = result.x[1]
-            self.params["b_ecmwf"] = result.x[2]
-            self.params["c"] = result.x[3]
-            self.params["d"] = result.x[4]
-            logger.info(
-                "CRPS optimization converged: a=%.3f, b_gfs=%.3f, b_ecmwf=%.3f, c=%.3f, d=%.3f",
-                *result.x,
+            result = optimize.minimize(
+                crps_loss, x0, method="L-BFGS-B", bounds=bounds,
+                options={"maxiter": 1000, "ftol": 1e-8},
             )
+
+            if result.success:
+                self.params["a"] = result.x[0]
+                self.params["b_gfs"] = result.x[1]
+                self.params["b_ecmwf"] = result.x[2]
+                self.params["c"] = result.x[3]
+                self.params["d"] = 0.0
+                logger.info(
+                    "CRPS optimization converged (constant_sigma): "
+                    "a=%.3f, b_gfs=%.3f, b_ecmwf=%.3f, c=%.3f",
+                    *result.x,
+                )
+            else:
+                logger.warning("CRPS optimization did not converge: %s", result.message)
         else:
-            logger.warning("CRPS optimization did not converge: %s", result.message)
+            # Full 5-parameter model with spread scaling
+            def crps_loss(params):
+                a, b_gfs, b_ecmwf, c, d = params
+                total_crps = 0.0
+                for i in range(n):
+                    mu = a + b_gfs * gfs_means[i] + b_ecmwf * ecmwf_means[i]
+                    sigma = max(c + d * gfs_stds[i], SIGMA_FLOOR_F)
+                    total_crps += _crps_gaussian(mu, sigma, observations[i])
+                return total_crps / n
+
+            x0 = [
+                self.params["a"], self.params["b_gfs"], self.params["b_ecmwf"],
+                self.params["c"], self.params["d"],
+            ]
+            bounds = [(-20, 20), (0, 2), (0, 2), (0.1, 10), (0, 3)]
+
+            result = optimize.minimize(
+                crps_loss, x0, method="L-BFGS-B", bounds=bounds,
+                options={"maxiter": 1000, "ftol": 1e-8},
+            )
+
+            if result.success:
+                self.params["a"] = result.x[0]
+                self.params["b_gfs"] = result.x[1]
+                self.params["b_ecmwf"] = result.x[2]
+                self.params["c"] = result.x[3]
+                self.params["d"] = result.x[4]
+                logger.info(
+                    "CRPS optimization converged: a=%.3f, b_gfs=%.3f, b_ecmwf=%.3f, c=%.3f, d=%.3f",
+                    *result.x,
+                )
+            else:
+                logger.warning("CRPS optimization did not converge: %s", result.message)
 
         # Step 2: Train isotonic calibrator on threshold exceedance
         if "thresholds" in training_data and "outcomes" in training_data:
@@ -247,10 +267,13 @@ class EMOSModel(ForecastModel):
                     + self.params["b_gfs"] * gfs_means[i]
                     + self.params["b_ecmwf"] * ecmwf_means[i]
                 )
-                sigma = max(
-                    self.params["c"] + self.params["d"] * gfs_stds[i],
-                    SIGMA_FLOOR_F,
-                )
+                if self.constant_sigma:
+                    sigma = max(self.params["c"], SIGMA_FLOOR_F)
+                else:
+                    sigma = max(
+                        self.params["c"] + self.params["d"] * gfs_stds[i],
+                        SIGMA_FLOOR_F,
+                    )
                 raw_probs[i] = 1.0 - stats.norm.cdf(thresholds[i], loc=mu, scale=sigma)
 
             self.calibrator.fit(raw_probs, outcomes)
@@ -319,6 +342,7 @@ class EMOSModel(ForecastModel):
             "params": self.params,
             "calibrator": self.calibrator,
             "trained": self._trained,
+            "constant_sigma": self.constant_sigma,
         }
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         with open(path, "wb") as f:
@@ -329,9 +353,15 @@ class EMOSModel(ForecastModel):
     def load(cls, path: str) -> "EMOSModel":
         with open(path, "rb") as f:
             data = pickle.load(f)
-        model = cls(model_version=data["version"])
+        model = cls(
+            model_version=data["version"],
+            constant_sigma=data.get("constant_sigma", False),
+        )
         model.params = data["params"]
         model.calibrator = data["calibrator"]
         model._trained = data["trained"]
-        logger.info("Model loaded from %s (version=%s)", path, model._version)
+        logger.info(
+            "Model loaded from %s (version=%s, constant_sigma=%s)",
+            path, model._version, model.constant_sigma,
+        )
         return model

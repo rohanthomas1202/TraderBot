@@ -14,6 +14,7 @@ import (
 	"autonomy-platform/internal/audit"
 	"autonomy-platform/internal/config"
 	"autonomy-platform/internal/events"
+	"autonomy-platform/internal/metrics"
 	"autonomy-platform/internal/models"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -52,6 +53,17 @@ type State struct {
 
 	// Market data cache (updated by data ingestion events)
 	MarketData       map[string]*models.MarketData // venue:market_id → latest data
+
+	// NowFunc overrides time.Now for backtesting. If nil, time.Now() is used.
+	NowFunc func() time.Time
+}
+
+// Now returns the current time, using NowFunc if set, otherwise time.Now().
+func (s *State) Now() time.Time {
+	if s.NowFunc != nil {
+		return s.NowFunc()
+	}
+	return time.Now()
 }
 
 type StrategyState struct {
@@ -85,11 +97,11 @@ func NewEngine(db *pgxpool.Pool, publisher *events.Publisher, auditor *audit.Log
 		policy:    policy,
 		hmacKey:   hmacKey,
 		logger:    slog.Default().With("service", "risk-engine"),
-		state:     newEmptyState(),
+		state:     NewEmptyState(),
 	}
 }
 
-func newEmptyState() *State {
+func NewEmptyState() *State {
 	return &State{
 		SystemMode:       "normal",
 		Strategies:       make(map[string]*StrategyState),
@@ -249,6 +261,15 @@ func (e *Engine) EvaluateOrder(ctx context.Context, order *models.ProposedOrder)
 		}
 	}
 
+	// Update risk check metrics
+	for _, r := range results {
+		result := "pass"
+		if !r.Passed {
+			result = "fail"
+		}
+		metrics.RiskChecksTotal.WithLabelValues(r.Name, result).Inc()
+	}
+
 	decision := DecisionApproved
 	if !allPassed {
 		decision = DecisionDenied
@@ -356,6 +377,12 @@ func (e *Engine) ReportFill(ctx context.Context, fill *FillReport) error {
 		ms.PositionContracts -= fill.Quantity
 		ms.PositionNotional -= fillNotional
 	}
+
+	// Update Prometheus gauges
+	metrics.TotalExposureMicros.Set(float64(e.state.TotalExposure))
+	metrics.DailyPnlMicros.Set(float64(e.state.DailyPnL))
+	metrics.PeakEquityMicros.Set(float64(e.state.PeakEquity))
+	metrics.CurrentEquityMicros.Set(float64(e.state.CurrentEquity))
 
 	// Update daily stats in DB
 	today := time.Now().UTC().Format("2006-01-02")

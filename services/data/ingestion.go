@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"autonomy-platform/internal/events"
+	"autonomy-platform/internal/metrics"
 	"autonomy-platform/internal/models"
 )
 
@@ -55,6 +56,7 @@ func (ing *Ingestion) RunMockFeed(ctx context.Context, interval time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			cycleStart := time.Now()
 			for _, marketID := range markets {
 				// Random walk the mid price
 				delta := int64(rng.Intn(20_000)) - 10_000 // ±1¢
@@ -99,7 +101,10 @@ func (ing *Ingestion) RunMockFeed(ctx context.Context, interval time.Duration) {
 					AskDepth:        md.AskDepth,
 					Timestamp:       md.UpdatedAt,
 				})
+
+				metrics.MarketDataAgeSec.WithLabelValues("mock", marketID).Set(0)
 			}
+			metrics.DataIngestionLatency.WithLabelValues("mock").Observe(time.Since(cycleStart).Seconds())
 		}
 	}
 }

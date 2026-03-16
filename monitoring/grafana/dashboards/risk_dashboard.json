@@ -1,0 +1,130 @@
+{
+  "dashboard": {
+    "id": null,
+    "uid": "risk-dashboard",
+    "title": "Risk Dashboard",
+    "tags": ["traderbot"],
+    "timezone": "utc",
+    "refresh": "10s",
+    "time": { "from": "now-1h", "to": "now" },
+    "panels": [
+      {
+        "id": 1,
+        "title": "Risk Check Pass/Fail Rates",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+        "targets": [
+          {
+            "expr": "sum(rate(risk_checks_total{result=\"fail\"}[5m])) by (check_name)",
+            "legendFormat": "FAIL: {{ check_name }}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": { "unit": "ops" }
+        }
+      },
+      {
+        "id": 2,
+        "title": "Risk Check Duration (P95)",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, sum(rate(risk_check_duration_seconds_bucket[5m])) by (le, check_name))",
+            "legendFormat": "{{ check_name }}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": { "unit": "s" }
+        }
+      },
+      {
+        "id": 3,
+        "title": "Exposure vs Limit",
+        "type": "gauge",
+        "gridPos": { "h": 6, "w": 8, "x": 0, "y": 8 },
+        "targets": [
+          {
+            "expr": "total_exposure_micros / 50000000000 * 100",
+            "legendFormat": "% of $50K limit"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "min": 0,
+            "max": 100,
+            "thresholds": {
+              "steps": [
+                { "value": null, "color": "green" },
+                { "value": 60, "color": "yellow" },
+                { "value": 80, "color": "red" }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 4,
+        "title": "Drawdown",
+        "type": "gauge",
+        "gridPos": { "h": 6, "w": 8, "x": 8, "y": 8 },
+        "targets": [
+          {
+            "expr": "(peak_equity_micros - current_equity_micros) / peak_equity_micros * 100",
+            "legendFormat": "Drawdown %"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "min": 0,
+            "max": 100,
+            "thresholds": {
+              "steps": [
+                { "value": null, "color": "green" },
+                { "value": 5, "color": "yellow" },
+                { "value": 10, "color": "red" }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 5,
+        "title": "Consecutive Losses by Strategy",
+        "type": "stat",
+        "gridPos": { "h": 6, "w": 8, "x": 16, "y": 8 },
+        "targets": [
+          {
+            "expr": "strategy_consecutive_losses",
+            "legendFormat": "{{ strategy_id }}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "thresholds": {
+              "steps": [
+                { "value": null, "color": "green" },
+                { "value": 3, "color": "yellow" },
+                { "value": 5, "color": "red" }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 6,
+        "title": "Kill Switch Events",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 24, "x": 0, "y": 14 },
+        "targets": [
+          {
+            "expr": "increase(kills_triggered_total[5m])",
+            "legendFormat": "{{ level }} ({{ scope }})"
+          }
+        ]
+      }
+    ]
+  }
+}

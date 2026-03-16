@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"autonomy-platform/internal/config"
+	"autonomy-platform/services/backtest"
 	"autonomy-platform/services/risk"
 	"autonomy-platform/services/watchdog"
 
@@ -69,6 +70,8 @@ func main() {
 		cmdConfig(ctx)
 	case "ledger":
 		cmdLedger(ctx)
+	case "backtest":
+		cmdBacktest(ctx)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", cmd)
 		printUsage()
@@ -677,6 +680,84 @@ func cmdLedger(ctx context.Context) {
 	fmt.Printf("\nTotal outstanding exposure: $%.2f\n", float64(totalNotional)/1e6)
 }
 
+func cmdBacktest(ctx context.Context) {
+	strategyName := flagValue("--strategy", "simple-momentum")
+	venue := flagValue("--venue", "mock")
+	fromStr := flagValue("--from", "")
+	toStr := flagValue("--to", "")
+	capitalStr := flagValue("--capital", "100000")
+	fillMode := flagValue("--fill-mode", "deterministic")
+	policyPath := flagValue("--policy", envOrDefault("POLICY_FILE", "./policies/paper.yaml"))
+	jsonOutput := false
+	for _, arg := range os.Args {
+		if arg == "--json" {
+			jsonOutput = true
+		}
+	}
+
+	policy, err := config.LoadPolicy(policyPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to load policy: %v\n", err)
+		os.Exit(1)
+	}
+
+	capitalDollars, _ := strconv.ParseFloat(capitalStr, 64)
+	initialCapital := int64(capitalDollars * 1_000_000)
+
+	var ticks []backtest.Tick
+
+	if fromStr != "" && toStr != "" {
+		// Load from database
+		db := mustConnectDB(ctx)
+		defer db.Close()
+
+		from, err := time.Parse("2006-01-02", fromStr)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid --from date: %v\n", err)
+			os.Exit(1)
+		}
+		to, err := time.Parse("2006-01-02", toStr)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid --to date: %v\n", err)
+			os.Exit(1)
+		}
+
+		snapshots, err := backtest.LoadSnapshots(ctx, db, venue, from, to.Add(24*time.Hour))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to load snapshots: %v\n", err)
+			os.Exit(1)
+		}
+		if len(snapshots) == 0 {
+			fmt.Fprintln(os.Stderr, "no market data found for the given date range. Run the scraper first.")
+			os.Exit(1)
+		}
+		ticks = backtest.GroupByTimestamp(snapshots, 5*time.Second)
+		fmt.Fprintf(os.Stderr, "Loaded %d snapshots → %d ticks\n", len(snapshots), len(ticks))
+	} else {
+		fmt.Fprintln(os.Stderr, "usage: trade-ctl backtest --strategy=<name> --from=2025-01-01 --to=2025-06-01 [--venue=kalshi] [--capital=100000] [--fill-mode=deterministic] [--policy=path] [--json]")
+		os.Exit(1)
+	}
+
+	result, err := backtest.Run(ctx, backtest.RunConfig{
+		StrategyName:   strategyName,
+		Venue:          venue,
+		Policy:         policy,
+		InitialCapital: initialCapital,
+		FillMode:       fillMode,
+		Ticks:          ticks,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "backtest failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	if jsonOutput {
+		backtest.PrintJSON(os.Stdout, result)
+	} else {
+		backtest.PrintTable(os.Stdout, result)
+	}
+}
+
 func mustConnectDB(ctx context.Context) *pgxpool.Pool {
 	db, err := pgxpool.New(ctx, envOrDefault("POSTGRES_URL", "postgres://trader:localdev@localhost:5432/autonomy?sslmode=disable"))
 	if err != nil {
@@ -714,6 +795,7 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  trace    Full lifecycle trace (trace <trace_id>)")
 	fmt.Fprintln(os.Stderr, "  config   Show running configuration")
 	fmt.Fprintln(os.Stderr, "  ledger   Query intent ledger (--status, --market, --limit)")
+	fmt.Fprintln(os.Stderr, "  backtest Run strategy backtest (--strategy, --from, --to, --venue, --capital, --fill-mode, --policy, --json)")
 }
 
 func envOrDefault(key, def string) string {

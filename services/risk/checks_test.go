@@ -55,7 +55,7 @@ func testPolicy() *config.Policy {
 
 // testState returns a clean state with fresh market data pre-loaded.
 func testState() *State {
-	s := newEmptyState()
+	s := NewEmptyState()
 	s.MarketData["mock:TEST-MARKET"] = &models.MarketData{
 		Venue:          "mock",
 		MarketID:       "TEST-MARKET",
@@ -210,7 +210,7 @@ func TestCheck_DataFreshness_Stale(t *testing.T) {
 }
 
 func TestCheck_DataFreshness_NoData(t *testing.T) {
-	s := newEmptyState()
+	s := NewEmptyState()
 	r := checkDataFreshness(context.Background(), validOrder(), s, testPolicy())
 	if r.Passed {
 		t.Fatal("expected fail with no market data")
@@ -267,7 +267,7 @@ func TestCheck_Spread_TooWide(t *testing.T) {
 }
 
 func TestCheck_Spread_NoData(t *testing.T) {
-	s := newEmptyState()
+	s := NewEmptyState()
 	r := checkSpread(context.Background(), validOrder(), s, testPolicy())
 	if !r.Passed {
 		t.Fatal("expected pass (skip) with no market data")

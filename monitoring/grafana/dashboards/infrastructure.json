@@ -1,0 +1,100 @@
+{
+  "dashboard": {
+    "id": null,
+    "uid": "infrastructure",
+    "title": "Infrastructure",
+    "tags": ["traderbot"],
+    "timezone": "utc",
+    "refresh": "10s",
+    "time": { "from": "now-1h", "to": "now" },
+    "panels": [
+      {
+        "id": 1,
+        "title": "Data Ingestion Latency",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, sum(rate(data_ingestion_latency_seconds_bucket[5m])) by (le, venue))",
+            "legendFormat": "P95 {{ venue }}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": { "unit": "s" }
+        }
+      },
+      {
+        "id": 2,
+        "title": "Market Data Age",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+        "targets": [
+          {
+            "expr": "market_data_age_seconds",
+            "legendFormat": "{{ venue }}:{{ market_id }}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": { "unit": "s" }
+        }
+      },
+      {
+        "id": 3,
+        "title": "Go GC Pause Duration",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+        "targets": [
+          {
+            "expr": "rate(go_gc_duration_seconds_sum[5m])",
+            "legendFormat": "{{ job }}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": { "unit": "s" }
+        }
+      },
+      {
+        "id": 4,
+        "title": "Fills Processed Rate",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+        "targets": [
+          {
+            "expr": "sum(rate(fills_processed_total[5m])) by (venue)",
+            "legendFormat": "{{ venue }}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": { "unit": "ops" }
+        }
+      },
+      {
+        "id": 5,
+        "title": "Process Memory (RSS)",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+        "targets": [
+          {
+            "expr": "process_resident_memory_bytes",
+            "legendFormat": "{{ job }}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": { "unit": "bytes" }
+        }
+      },
+      {
+        "id": 6,
+        "title": "Open File Descriptors",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+        "targets": [
+          {
+            "expr": "process_open_fds",
+            "legendFormat": "{{ job }}"
+          }
+        ]
+      }
+    ]
+  }
+}

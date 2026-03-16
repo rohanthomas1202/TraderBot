@@ -14,6 +14,7 @@ import (
 	"autonomy-platform/internal/config"
 	"autonomy-platform/internal/events"
 	"autonomy-platform/internal/grpcauth"
+	"autonomy-platform/internal/metrics"
 	"autonomy-platform/internal/health"
 	"autonomy-platform/internal/logging"
 	"autonomy-platform/internal/models"
@@ -151,7 +152,10 @@ func main() {
 		"/risk.RiskEngine/UpdateLimit":   {"trade-ctl"},
 	}
 
-	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(grpcauth.UnaryCallerInterceptor(allowedCallers)))
+	grpcServer := grpc.NewServer(grpc.ChainUnaryInterceptor(
+		metrics.UnaryServerMetricsInterceptor("risk-engine"),
+		grpcauth.UnaryCallerInterceptor(allowedCallers),
+	))
 	riskpb.RegisterRiskEngineServer(grpcServer, risk.NewGRPCServer(engine))
 
 	go func() {

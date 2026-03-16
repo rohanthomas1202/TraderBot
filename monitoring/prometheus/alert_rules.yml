@@ -1,0 +1,54 @@
+groups:
+  - name: trading_alerts
+    rules:
+      - alert: P95LatencyHigh
+        expr: histogram_quantile(0.95, sum(rate(grpc_request_duration_seconds_bucket[5m])) by (le, service)) > 0.5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "gRPC P95 latency > 500ms on {{ $labels.service }}"
+          description: "P95 latency is {{ $value }}s on {{ $labels.service }}"
+
+      - alert: FillRateLow
+        expr: rate(orders_filled_total[10m]) / rate(orders_submitted_total[10m]) < 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Fill rate below 80%"
+          description: "Fill rate is {{ $value | humanizePercentage }}"
+
+      - alert: ServiceDown
+        expr: up == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Service {{ $labels.job }} is down"
+          description: "{{ $labels.job }} has been unreachable for 30 seconds"
+
+      - alert: ExposureNearLimit
+        expr: total_exposure_micros > 40000000000
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Total exposure above 80% of $50K limit"
+          description: "Exposure is ${{ $value | humanize }} micros"
+
+      - alert: DailyLossHigh
+        expr: daily_pnl_micros < -5000000000
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Daily P&L loss exceeds $5K"
+          description: "Daily P&L is {{ $value }} micros"
+
+      - alert: KillSwitchTriggered
+        expr: increase(kills_triggered_total[1m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Kill switch triggered ({{ $labels.level }}, scope: {{ $labels.scope }})"

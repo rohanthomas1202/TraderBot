@@ -38,3 +38,18 @@ func (s *Subscriber) Subscribe(subject, consumerName string, handler nats.MsgHan
 	s.logger.Info("subscribed", "subject", subject, "consumer", consumerName)
 	return sub, nil
 }
+
+// SubscribeNew creates a durable subscription that only receives new messages
+// (not historical replay). Useful for dashboard and alerting consumers.
+func (s *Subscriber) SubscribeNew(subject, consumerName string, handler nats.MsgHandler) (*nats.Subscription, error) {
+	sub, err := s.js.Subscribe(subject, handler,
+		nats.Durable(consumerName),
+		nats.DeliverNew(),
+		nats.AckExplicit(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("subscribe to %s: %w", subject, err)
+	}
+	s.logger.Info("subscribed (new only)", "subject", subject, "consumer", consumerName)
+	return sub, nil
+}

@@ -1,0 +1,97 @@
+{
+  "dashboard": {
+    "id": null,
+    "uid": "system-overview",
+    "title": "System Overview",
+    "tags": ["traderbot"],
+    "timezone": "utc",
+    "refresh": "10s",
+    "time": { "from": "now-1h", "to": "now" },
+    "panels": [
+      {
+        "id": 1,
+        "title": "Service Health",
+        "type": "stat",
+        "gridPos": { "h": 4, "w": 24, "x": 0, "y": 0 },
+        "targets": [
+          {
+            "expr": "up",
+            "legendFormat": "{{ job }}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "mappings": [
+              { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }
+            ]
+          }
+        }
+      },
+      {
+        "id": 2,
+        "title": "gRPC Latency P50 / P95 / P99",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.50, sum(rate(grpc_request_duration_seconds_bucket[5m])) by (le, service))",
+            "legendFormat": "P50 {{ service }}"
+          },
+          {
+            "expr": "histogram_quantile(0.95, sum(rate(grpc_request_duration_seconds_bucket[5m])) by (le, service))",
+            "legendFormat": "P95 {{ service }}"
+          },
+          {
+            "expr": "histogram_quantile(0.99, sum(rate(grpc_request_duration_seconds_bucket[5m])) by (le, service))",
+            "legendFormat": "P99 {{ service }}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": { "unit": "s" }
+        }
+      },
+      {
+        "id": 3,
+        "title": "gRPC Error Rate",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+        "targets": [
+          {
+            "expr": "sum(rate(grpc_request_duration_seconds_count{code!=\"OK\"}[5m])) by (service)",
+            "legendFormat": "{{ service }}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": { "unit": "reqps" }
+        }
+      },
+      {
+        "id": 4,
+        "title": "Go Goroutines",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+        "targets": [
+          {
+            "expr": "go_goroutines",
+            "legendFormat": "{{ job }}"
+          }
+        ]
+      },
+      {
+        "id": 5,
+        "title": "Go Heap Memory",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+        "targets": [
+          {
+            "expr": "go_memstats_heap_alloc_bytes",
+            "legendFormat": "{{ job }}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": { "unit": "bytes" }
+        }
+      }
+    ]
+  }
+}

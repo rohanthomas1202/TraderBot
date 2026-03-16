@@ -14,6 +14,7 @@ import (
 	"autonomy-platform/internal/audit"
 	"autonomy-platform/internal/events"
 	"autonomy-platform/internal/grpcauth"
+	"autonomy-platform/internal/metrics"
 	"autonomy-platform/internal/health"
 	"autonomy-platform/internal/logging"
 	"autonomy-platform/services/watchdog"
@@ -115,7 +116,10 @@ func main() {
 		"/watchdog.Watchdog/ResumeTrading":     {"trade-ctl"},
 	}
 
-	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(grpcauth.UnaryCallerInterceptor(allowedCallers)))
+	grpcServer := grpc.NewServer(grpc.ChainUnaryInterceptor(
+		metrics.UnaryServerMetricsInterceptor("watchdog"),
+		grpcauth.UnaryCallerInterceptor(allowedCallers),
+	))
 	watchdogpb.RegisterWatchdogServer(grpcServer, watchdog.NewGRPCServer(killMgr, dms))
 
 	go func() {

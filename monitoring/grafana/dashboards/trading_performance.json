@@ -1,0 +1,162 @@
+{
+  "dashboard": {
+    "id": null,
+    "uid": "trading-performance",
+    "title": "Trading Performance",
+    "tags": ["traderbot"],
+    "timezone": "utc",
+    "refresh": "10s",
+    "time": { "from": "now-1h", "to": "now" },
+    "panels": [
+      {
+        "id": 1,
+        "title": "Daily P&L",
+        "type": "stat",
+        "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+        "targets": [
+          {
+            "expr": "daily_pnl_micros / 1000000",
+            "legendFormat": "P&L ($)"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "currencyUSD",
+            "thresholds": {
+              "steps": [
+                { "value": null, "color": "red" },
+                { "value": 0, "color": "green" }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 2,
+        "title": "Total Exposure",
+        "type": "stat",
+        "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+        "targets": [
+          {
+            "expr": "total_exposure_micros / 1000000",
+            "legendFormat": "Exposure ($)"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": { "unit": "currencyUSD" }
+        }
+      },
+      {
+        "id": 3,
+        "title": "Peak / Current Equity",
+        "type": "stat",
+        "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+        "targets": [
+          {
+            "expr": "current_equity_micros / 1000000",
+            "legendFormat": "Current"
+          },
+          {
+            "expr": "peak_equity_micros / 1000000",
+            "legendFormat": "Peak"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": { "unit": "currencyUSD" }
+        }
+      },
+      {
+        "id": 4,
+        "title": "Open Orders",
+        "type": "stat",
+        "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+        "targets": [
+          {
+            "expr": "sum(open_orders_count)",
+            "legendFormat": "Open"
+          }
+        ]
+      },
+      {
+        "id": 5,
+        "title": "Orders Submitted / Filled Rate",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+        "targets": [
+          {
+            "expr": "sum(rate(orders_submitted_total[5m]))",
+            "legendFormat": "Submitted/s"
+          },
+          {
+            "expr": "sum(rate(orders_filled_total[5m]))",
+            "legendFormat": "Filled/s"
+          },
+          {
+            "expr": "sum(rate(orders_rejected_total[5m]))",
+            "legendFormat": "Rejected/s"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": { "unit": "ops" }
+        }
+      },
+      {
+        "id": 6,
+        "title": "Order-to-Fill Latency",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.50, sum(rate(order_to_fill_latency_seconds_bucket[5m])) by (le))",
+            "legendFormat": "P50"
+          },
+          {
+            "expr": "histogram_quantile(0.95, sum(rate(order_to_fill_latency_seconds_bucket[5m])) by (le))",
+            "legendFormat": "P95"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": { "unit": "s" }
+        }
+      },
+      {
+        "id": 7,
+        "title": "Exposure Over Time",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+        "targets": [
+          {
+            "expr": "total_exposure_micros / 1000000",
+            "legendFormat": "Total Exposure ($)"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": { "unit": "currencyUSD" }
+        }
+      },
+      {
+        "id": 8,
+        "title": "P&L Over Time",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+        "targets": [
+          {
+            "expr": "daily_pnl_micros / 1000000",
+            "legendFormat": "Daily P&L ($)"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "currencyUSD",
+            "thresholds": {
+              "steps": [
+                { "value": null, "color": "red" },
+                { "value": 0, "color": "green" }
+              ]
+            }
+          }
+        }
+      }
+    ]
+  }
+}

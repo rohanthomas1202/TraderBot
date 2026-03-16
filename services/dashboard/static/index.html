@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TraderBot Dashboard</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Courier New', monospace; background: #0d1117; color: #c9d1d9; }
+.login-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #0d1117; display: flex; align-items: center; justify-content: center; z-index: 100; }
+.login-box { background: #161b22; padding: 2rem; border-radius: 8px; border: 1px solid #30363d; }
+.login-box h2 { margin-bottom: 1rem; color: #58a6ff; }
+.login-box input { display: block; width: 300px; padding: 0.5rem; margin-bottom: 1rem; background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; border-radius: 4px; font-family: inherit; }
+.login-box button { padding: 0.5rem 1.5rem; background: #238636; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-family: inherit; }
+.login-box button:hover { background: #2ea043; }
+.login-error { color: #f85149; margin-top: 0.5rem; display: none; }
+header { background: #161b22; padding: 0.75rem 1.5rem; border-bottom: 1px solid #30363d; display: flex; justify-content: space-between; align-items: center; }
+header h1 { font-size: 1rem; color: #58a6ff; }
+.status-badge { padding: 0.25rem 0.75rem; border-radius: 12px; font-size: 0.75rem; font-weight: bold; }
+.status-normal { background: #238636; color: #fff; }
+.status-halted { background: #da3633; color: #fff; }
+.ws-status { font-size: 0.75rem; color: #8b949e; }
+.grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; padding: 1rem; }
+.panel { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 1rem; }
+.panel h3 { font-size: 0.85rem; color: #8b949e; margin-bottom: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
+.stat-value { font-size: 1.5rem; font-weight: bold; }
+.stat-label { font-size: 0.75rem; color: #8b949e; }
+.positive { color: #3fb950; }
+.negative { color: #f85149; }
+.span-2 { grid-column: span 2; }
+.span-4 { grid-column: span 4; }
+table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+th { text-align: left; color: #8b949e; padding: 0.4rem; border-bottom: 1px solid #30363d; }
+td { padding: 0.4rem; border-bottom: 1px solid #21262d; }
+.badge { padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.7rem; }
+.badge-open { background: #1f6feb33; color: #58a6ff; }
+.badge-filled { background: #23863633; color: #3fb950; }
+.badge-rejected { background: #da363333; color: #f85149; }
+.badge-cancelled { background: #8b949e33; color: #8b949e; }
+.badge-pending { background: #d2992233; color: #d29922; }
+.kill-btn { padding: 0.75rem 1.5rem; background: #da3633; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-family: inherit; font-size: 0.9rem; font-weight: bold; }
+.kill-btn:hover { background: #f85149; }
+.ack-btn, .resume-btn { padding: 0.5rem 1rem; border: 1px solid #30363d; background: #21262d; color: #c9d1d9; border-radius: 4px; cursor: pointer; font-family: inherit; margin-right: 0.5rem; }
+.ack-btn:hover, .resume-btn:hover { background: #30363d; }
+.event-log { max-height: 200px; overflow-y: auto; font-size: 0.75rem; }
+.event-item { padding: 0.3rem 0; border-bottom: 1px solid #21262d; }
+.event-time { color: #8b949e; }
+.event-type { color: #58a6ff; }
+</style>
+</head>
+<body>
+
+<div class="login-overlay" id="loginOverlay">
+  <div class="login-box">
+    <h2>TraderBot Dashboard</h2>
+    <input type="password" id="apiKeyInput" placeholder="API Key" autofocus>
+    <button onclick="login()">Login</button>
+    <div class="login-error" id="loginError">Invalid API key</div>
+  </div>
+</div>
+
+<header>
+  <h1>TraderBot Dashboard</h1>
+  <div>
+    <span class="status-badge status-normal" id="systemMode">NORMAL</span>
+    <span class="ws-status" id="wsStatus">Connecting...</span>
+  </div>
+</header>
+
+<div class="grid">
+  <!-- Row 1: Key Stats -->
+  <div class="panel">
+    <h3>Daily P&L</h3>
+    <div class="stat-value" id="dailyPnl">$0.00</div>
+    <div class="stat-label">Today</div>
+  </div>
+  <div class="panel">
+    <h3>Total Exposure</h3>
+    <div class="stat-value" id="totalExposure">$0.00</div>
+    <div class="stat-label">Across all venues</div>
+  </div>
+  <div class="panel">
+    <h3>Fills Today</h3>
+    <div class="stat-value" id="fillCount">0</div>
+    <div class="stat-label">Orders filled</div>
+  </div>
+  <div class="panel">
+    <h3>Turnover</h3>
+    <div class="stat-value" id="turnover">$0.00</div>
+    <div class="stat-label">Daily volume</div>
+  </div>
+
+  <!-- Row 2: Positions -->
+  <div class="panel span-2">
+    <h3>Positions</h3>
+    <table>
+      <thead><tr><th>Market</th><th>Strategy</th><th>Qty</th><th>Notional</th></tr></thead>
+      <tbody id="positionsTable"></tbody>
+    </table>
+  </div>
+
+  <!-- Row 2: Orders -->
+  <div class="panel span-2">
+    <h3>Recent Orders</h3>
+    <table>
+      <thead><tr><th>Time</th><th>Market</th><th>Side</th><th>Qty</th><th>Price</th><th>Status</th></tr></thead>
+      <tbody id="ordersTable"></tbody>
+    </table>
+  </div>
+
+  <!-- Row 3: Kill Switch Controls -->
+  <div class="panel">
+    <h3>Kill Switch</h3>
+    <button class="kill-btn" onclick="triggerKill()">KILL ALL</button>
+    <div style="margin-top: 0.75rem;">
+      <button class="ack-btn" onclick="ackHalt()">Acknowledge</button>
+      <button class="resume-btn" onclick="resumeTrading()">Resume</button>
+    </div>
+    <div id="haltInfo" style="margin-top: 0.75rem; font-size: 0.8rem;"></div>
+  </div>
+
+  <!-- Row 3: Live Events -->
+  <div class="panel span-3" style="grid-column: span 3;">
+    <h3>Live Events</h3>
+    <div class="event-log" id="eventLog"></div>
+  </div>
+
+  <!-- Row 4: Audit Log -->
+  <div class="panel span-4">
+    <h3>Audit Log</h3>
+    <table>
+      <thead><tr><th>Time</th><th>Service</th><th>Event</th><th>Severity</th><th>Trace</th></tr></thead>
+      <tbody id="auditTable"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const API = '';
+let ws = null;
+let reconnectDelay = 1000;
+
+function micros(v) { return '$' + (v / 1000000).toFixed(2); }
+function shortTime(ts) { return new Date(ts).toLocaleTimeString(); }
+function statusBadge(s) {
+  const cls = {'open':'badge-open','filled':'badge-filled','rejected':'badge-rejected',
+    'cancelled':'badge-cancelled','pending':'badge-pending','partially_filled':'badge-open',
+    'failed':'badge-rejected'}[s] || 'badge-pending';
+  return `<span class="badge ${cls}">${s}</span>`;
+}
+
+async function login() {
+  const key = document.getElementById('apiKeyInput').value;
+  try {
+    const res = await fetch(API + '/api/login', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({api_key: key})
+    });
+    if (res.ok) {
+      document.getElementById('loginOverlay').style.display = 'none';
+      loadInitialData();
+      connectWS();
+    } else {
+      document.getElementById('loginError').style.display = 'block';
+    }
+  } catch(e) { document.getElementById('loginError').style.display = 'block'; }
+}
+
+document.getElementById('apiKeyInput').addEventListener('keypress', function(e) {
+  if (e.key === 'Enter') login();
+});
+
+async function loadInitialData() {
+  try {
+    const [orders, positions, audit, halts, risk] = await Promise.all([
+      fetch(API + '/api/orders').then(r => r.json()),
+      fetch(API + '/api/positions').then(r => r.json()),
+      fetch(API + '/api/audit').then(r => r.json()),
+      fetch(API + '/api/halts').then(r => r.json()),
+      fetch(API + '/api/risk').then(r => r.json()),
+    ]);
+    renderOrders(orders || []);
+    renderPositions(positions || []);
+    renderAudit(audit || []);
+    renderHalts(halts || []);
+    renderRiskStats(risk);
+  } catch(e) { console.error('Failed to load initial data:', e); }
+}
+
+function renderRiskStats(s) {
+  if (!s) return;
+  const pnl = document.getElementById('dailyPnl');
+  pnl.textContent = micros(s.daily_pnl_micros);
+  pnl.className = 'stat-value ' + (s.daily_pnl_micros >= 0 ? 'positive' : 'negative');
+  document.getElementById('fillCount').textContent = s.fill_count || 0;
+  document.getElementById('turnover').textContent = micros(s.total_turnover_micros);
+}
+
+function renderOrders(orders) {
+  const tb = document.getElementById('ordersTable');
+  tb.innerHTML = orders.slice(0, 20).map(o => `<tr>
+    <td>${shortTime(o.proposed_at)}</td>
+    <td>${o.market_id}</td>
+    <td>${o.side}</td>
+    <td>${o.quantity}</td>
+    <td>${micros(o.price_micros)}</td>
+    <td>${statusBadge(o.status)}</td>
+  </tr>`).join('');
+}
+
+function renderPositions(positions) {
+  const tb = document.getElementById('positionsTable');
+  if (!positions.length) { tb.innerHTML = '<tr><td colspan="4" style="color:#8b949e">No positions</td></tr>'; return; }
+  tb.innerHTML = positions.map(p => `<tr>
+    <td>${p.market_id}</td>
+    <td>${p.strategy_id}</td>
+    <td>${p.net_quantity}</td>
+    <td>${micros(p.notional_micros)}</td>
+  </tr>`).join('');
+}
+
+function renderAudit(entries) {
+  const tb = document.getElementById('auditTable');
+  tb.innerHTML = entries.slice(0, 15).map(a => `<tr>
+    <td>${shortTime(a.timestamp)}</td>
+    <td>${a.service}</td>
+    <td class="event-type">${a.event_type}</td>
+    <td>${a.severity}</td>
+    <td style="color:#8b949e">${a.trace_id ? a.trace_id.substring(0,8) : '-'}</td>
+  </tr>`).join('');
+}
+
+function renderHalts(halts) {
+  const info = document.getElementById('haltInfo');
+  const badge = document.getElementById('systemMode');
+  if (!halts || !halts.length) {
+    info.textContent = 'No active halts';
+    badge.textContent = 'NORMAL';
+    badge.className = 'status-badge status-normal';
+    return;
+  }
+  badge.textContent = 'HALTED';
+  badge.className = 'status-badge status-halted';
+  info.innerHTML = halts.map(h => `<div>${h.level} (${h.scope}): ${h.reason}</div>`).join('');
+}
+
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(proto + '//' + location.host + '/ws');
+  ws.onopen = () => {
+    document.getElementById('wsStatus').textContent = 'Connected';
+    reconnectDelay = 1000;
+  };
+  ws.onclose = () => {
+    document.getElementById('wsStatus').textContent = 'Disconnected';
+    setTimeout(connectWS, reconnectDelay);
+    reconnectDelay = Math.min(reconnectDelay * 2, 30000);
+  };
+  ws.onmessage = (e) => {
+    try {
+      const msg = JSON.parse(e.data);
+      handleEvent(msg);
+    } catch(err) { console.error('WS parse error:', err); }
+  };
+}
+
+function handleEvent(msg) {
+  const log = document.getElementById('eventLog');
+  const item = document.createElement('div');
+  item.className = 'event-item';
+  item.innerHTML = `<span class="event-time">${new Date().toLocaleTimeString()}</span> <span class="event-type">${msg.type}</span>`;
+  log.prepend(item);
+  // Keep only last 50 events
+  while (log.children.length > 50) log.removeChild(log.lastChild);
+
+  // Auto-refresh data on key events
+  if (msg.type.startsWith('order.') || msg.type.startsWith('kill.')) {
+    loadInitialData();
+  }
+}
+
+async function triggerKill() {
+  if (!confirm('Trigger KILL SWITCH? This will cancel all open orders.')) return;
+  try {
+    const res = await fetch(API + '/api/kill', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({level: 'cancel_only', scope: 'global'})
+    });
+    if (!res.ok) alert('Kill switch failed: ' + await res.text());
+    else loadInitialData();
+  } catch(e) { alert('Kill switch error: ' + e); }
+}
+
+async function ackHalt() {
+  const cause = prompt('Root cause:');
+  if (!cause) return;
+  try {
+    await fetch(API + '/api/ack', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({scope: 'global', root_cause: cause})
+    });
+    loadInitialData();
+  } catch(e) { alert('Ack error: ' + e); }
+}
+
+async function resumeTrading() {
+  if (!confirm('Resume trading?')) return;
+  try {
+    await fetch(API + '/api/resume', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({scope: 'global'})
+    });
+    loadInitialData();
+  } catch(e) { alert('Resume error: ' + e); }
+}
+
+// Check if already logged in
+fetch(API + '/api/risk').then(r => {
+  if (r.ok) {
+    document.getElementById('loginOverlay').style.display = 'none';
+    loadInitialData();
+    connectWS();
+  }
+});
+</script>
+</body>
+</html>

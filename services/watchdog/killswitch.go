@@ -9,6 +9,7 @@ import (
 
 	"autonomy-platform/internal/audit"
 	"autonomy-platform/internal/events"
+	"autonomy-platform/internal/metrics"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -195,6 +196,8 @@ func (k *KillSwitchManager) Trigger(ctx context.Context, level KillSwitchLevel, 
 		"triggered_by": triggeredBy,
 		})
 	}
+
+	metrics.KillsTriggeredTotal.WithLabelValues(string(level), scope).Inc()
 
 	k.logger.Warn("KILL SWITCH ACTIVATED",
 		"level", level,

@@ -1,4 +1,4 @@
-.PHONY: all build test dev up down migrate status kill ack resume orders risk proto audit trace config ledger test-certification test-report
+.PHONY: all build test dev up down migrate status kill ack resume orders risk proto audit trace config ledger test-certification test-report monitor monitor-down dashboard alertbot scraper backtest chaos
 
 # ─── Protobuf ───
 
@@ -48,6 +48,7 @@ migrate:
 	docker compose exec -T postgres psql -U trader -d autonomy -f /docker-entrypoint-initdb.d/001_initial.up.sql 2>/dev/null || true
 	docker compose exec -T postgres psql -U trader -d autonomy -f /docker-entrypoint-initdb.d/002_order_intent_ledger.up.sql 2>/dev/null || true
 	docker compose exec -T postgres psql -U trader -d autonomy -f /docker-entrypoint-initdb.d/003_recon_snapshots.up.sql 2>/dev/null || true
+	docker compose exec -T postgres psql -U trader -d autonomy -f /docker-entrypoint-initdb.d/004_backtest.up.sql 2>/dev/null || true
 	@echo "Migrations complete."
 
 migrate-down:
@@ -122,14 +123,14 @@ simulate: up migrate
 	@echo "Starting data ingestion..."
 	go run ./cmd/data-ingestion &
 	@sleep 2
-	@echo "Starting watchdog..."
-	GRPC_PORT=50055 EXECUTION_ENGINE_ADDR=localhost:50040 go run ./cmd/watchdog &
-	@sleep 1
 	@echo "Starting risk engine..."
 	GRPC_PORT=50020 go run ./cmd/risk-engine &
 	@sleep 1
 	@echo "Starting execution engine..."
 	GRPC_PORT=50040 RISK_ENGINE_ADDR=localhost:50020 WATCHDOG_ADDR=localhost:50055 go run ./cmd/execution-engine &
+	@sleep 2
+	@echo "Starting watchdog..."
+	GRPC_PORT=50055 EXECUTION_ENGINE_ADDR=localhost:50040 go run ./cmd/watchdog &
 	@sleep 1
 	@echo "Starting strategy engine..."
 	RISK_ENGINE_ADDR=localhost:50020 EXECUTION_ENGINE_ADDR=localhost:50040 go run ./cmd/strategy-engine &
@@ -137,6 +138,35 @@ simulate: up migrate
 	@echo "All services running. Press Ctrl+C to stop."
 	@echo "Monitor with: make status"
 	@wait
+
+dashboard:
+	DASHBOARD_API_KEY=localdev go run ./cmd/dashboard
+
+alertbot:
+	set -a && . ./.env && set +a && go run ./cmd/alertbot
+
+scraper:
+	go run ./cmd/data-scraper
+
+backtest:
+	@echo "Usage: make backtest STRATEGY=simple-momentum FROM=2025-01-01 TO=2025-06-01"
+	go run ./cmd/trade-ctl backtest --strategy=$(STRATEGY) --from=$(FROM) --to=$(TO)
+
+chaos: up migrate
+	@echo "Running chaos tests..."
+	go test ./tests/chaos/... -v -count=1 -tags=chaos -timeout 10m
+
+# ─── Monitoring ───
+
+monitor: up
+	docker compose up -d prometheus grafana
+	@echo ""
+	@echo "Monitoring stack running:"
+	@echo "  Prometheus:  http://localhost:9090"
+	@echo "  Grafana:     http://localhost:3000 (admin/localdev)"
+
+monitor-down:
+	docker compose stop prometheus grafana
 
 # ─── Linting ───
 

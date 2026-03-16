@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"autonomy-platform/internal/config"
+	"autonomy-platform/internal/metrics"
 	"autonomy-platform/internal/models"
 )
 
@@ -51,8 +52,10 @@ func RunAllChecks(ctx context.Context, order *models.ProposedOrder, state *State
 	checks := allChecks()
 	results := make([]CheckResultDetail, 0, len(checks))
 	for _, c := range checks {
+		start := time.Now()
 		r := c.Func(ctx, order, state, policy)
 		r.Name = c.Name
+		metrics.RiskCheckDuration.WithLabelValues(c.Name).Observe(time.Since(start).Seconds())
 		results = append(results, r)
 	}
 	return results
@@ -109,7 +112,7 @@ func checkDataFreshness(_ context.Context, order *models.ProposedOrder, state *S
 	if !exists {
 		return fail("no market data available")
 	}
-	age := time.Since(md.UpdatedAt).Seconds()
+	age := state.Now().Sub(md.UpdatedAt).Seconds()
 	maxAge := float64(policy.DataQuality.MaxDataAgeSeconds)
 	if age > maxAge {
 		return fail(fmt.Sprintf("data age %.1fs exceeds %.0fs limit", age, maxAge))
@@ -203,7 +206,7 @@ func checkStrategyOrderFrequency(_ context.Context, order *models.ProposedOrder,
 	if !exists {
 		return pass()
 	}
-	oneMinuteAgo := time.Now().Add(-1 * time.Minute)
+	oneMinuteAgo := state.Now().Add(-1 * time.Minute)
 	count := int32(0)
 	for _, t := range times {
 		if t.After(oneMinuteAgo) {
@@ -272,7 +275,7 @@ func checkGlobalDrawdown(_ context.Context, _ *models.ProposedOrder, state *Stat
 func checkDuplicateOrder(_ context.Context, order *models.ProposedOrder, state *State, _ *config.Policy) CheckResultDetail {
 	key := order.IdempotencyKey()
 	lastSeen, exists := state.RecentOrderKeys[key]
-	if exists && time.Since(lastSeen) < 30*time.Second {
+	if exists && state.Now().Sub(lastSeen) < 30*time.Second {
 		return fail("duplicate order within 30s window")
 	}
 	return pass()

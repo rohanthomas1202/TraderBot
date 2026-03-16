@@ -10,6 +10,7 @@ import (
 	"autonomy-platform/internal/audit"
 	"autonomy-platform/internal/events"
 	"autonomy-platform/internal/ledger"
+	"autonomy-platform/internal/metrics"
 	"autonomy-platform/internal/models"
 	"autonomy-platform/services/risk"
 
@@ -293,6 +294,7 @@ func (e *Engine) SubmitOrder(ctx context.Context, approval *risk.Approval) (*mod
 	if ack.Status == "rejected" {
 		e.transitionOrder(ctx, rec, models.StatusRejected)
 		e.ledger.UpdateStatus(ctx, intent.IntentID, ledger.IntentRejected)
+		metrics.OrdersSubmittedTotal.WithLabelValues(order.Venue, order.StrategyID, "rejected").Inc()
 		e.auditor.LogWarn(ctx, "order.rejected", order.TraceID, map[string]interface{}{
 			"reason": ack.RejectReason,
 		})
@@ -302,6 +304,7 @@ func (e *Engine) SubmitOrder(ctx context.Context, approval *risk.Approval) (*mod
 	// Order is now open on the exchange — update intent to open
 	e.transitionOrder(ctx, rec, models.StatusOpen)
 	e.ledger.UpdateStatus(ctx, intent.IntentID, ledger.IntentOpen)
+	metrics.OrdersSubmittedTotal.WithLabelValues(order.Venue, order.StrategyID, "open").Inc()
 	e.mu.Lock()
 	e.openOrders[internalID.String()] = rec
 	e.intentMap[internalID.String()] = intent.IntentID
@@ -379,6 +382,8 @@ func (e *Engine) CancelAll(ctx context.Context, reason, cancelledBy string) (int
 	}
 	e.mu.Unlock()
 
+	metrics.OpenOrdersCount.WithLabelValues("").Set(0)
+
 	e.auditor.LogCritical(ctx, "order.cancel_all", "", map[string]interface{}{
 		"reason":      reason,
 		"cancelled_by": cancelledBy,
@@ -438,8 +443,14 @@ func (e *Engine) processFill(ctx context.Context, f *ExchangeFill, riskCallback 
 	now := time.Now().UTC()
 	rec.LastFillAt = &now
 
+	metrics.FillsProcessedTotal.WithLabelValues(rec.Venue).Inc()
+	if rec.SubmittedAt != nil {
+		metrics.OrderToFillLatency.WithLabelValues(rec.Venue).Observe(time.Since(*rec.SubmittedAt).Seconds())
+	}
+
 	if rec.FilledQuantity >= rec.Quantity {
 		e.transitionOrder(ctx, rec, models.StatusFilled)
+		metrics.OrdersFilledTotal.WithLabelValues(rec.Venue, rec.StrategyID).Inc()
 		e.mu.Lock()
 		intentID, hasIntent := e.intentMap[rec.InternalOrderID.String()]
 		delete(e.openOrders, rec.InternalOrderID.String())

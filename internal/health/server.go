@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+
+	"autonomy-platform/internal/metrics"
 )
 
 // CheckFunc is a health check function that returns nil if healthy.
@@ -38,12 +40,15 @@ type healthResponse struct {
 
 // Start runs the HTTP server in a goroutine. Returns immediately.
 func (s *Server) Start() {
+	metrics.MustRegister()
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.handleHealth)
+	mux.Handle("/metrics", metrics.Handler())
 
 	go func() {
 		addr := ":" + s.port
-		slog.Info("health endpoint starting", "port", s.port, "path", "/health")
+		slog.Info("health endpoint starting", "port", s.port, "paths", []string{"/health", "/metrics"})
 		if err := http.ListenAndServe(addr, mux); err != nil {
 			slog.Error("health server failed", "error", err)
 		}

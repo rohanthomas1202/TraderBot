@@ -18,6 +18,7 @@ import (
 	"autonomy-platform/internal/audit"
 	"autonomy-platform/internal/convert"
 	"autonomy-platform/internal/events"
+	"autonomy-platform/internal/metrics"
 	"autonomy-platform/internal/grpcauth"
 	"autonomy-platform/internal/health"
 	"autonomy-platform/internal/ledger"
@@ -193,7 +194,10 @@ func main() {
 		"/execution.ExecutionEngine/GetOrderSummary":  {"*"},
 	}
 
-	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(grpcauth.UnaryCallerInterceptor(allowedCallers)))
+	grpcServer := grpc.NewServer(grpc.ChainUnaryInterceptor(
+		metrics.UnaryServerMetricsInterceptor("execution-engine"),
+		grpcauth.UnaryCallerInterceptor(allowedCallers),
+	))
 	executionpb.RegisterExecutionEngineServer(grpcServer, execution.NewGRPCServer(engine, dbPool))
 
 	go func() {

@@ -49,6 +49,7 @@ migrate:
 	docker compose exec -T postgres psql -U trader -d autonomy -f /docker-entrypoint-initdb.d/002_order_intent_ledger.up.sql 2>/dev/null || true
 	docker compose exec -T postgres psql -U trader -d autonomy -f /docker-entrypoint-initdb.d/003_recon_snapshots.up.sql 2>/dev/null || true
 	docker compose exec -T postgres psql -U trader -d autonomy -f /docker-entrypoint-initdb.d/004_backtest.up.sql 2>/dev/null || true
+	docker compose exec -T postgres psql -U trader -d autonomy -f /docker-entrypoint-initdb.d/005_market_data_logging.up.sql 2>/dev/null || true
 	@echo "Migrations complete."
 
 migrate-down:

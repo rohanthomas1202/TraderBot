@@ -39,7 +39,7 @@ func main() {
 	}
 
 	client, err := kalshi.NewClient(kalshi.Config{
-		BaseURL:        envOrDefault("KALSHI_BASE_URL", "https://api.elections.kalshi.com/trade-api/v2"),
+		BaseURL:        envOrDefault("KALSHI_API_BASE_URL", "https://api.elections.kalshi.com/trade-api/v2"),
 		KeyID:          keyID,
 		PrivateKeyPath: keyPath,
 	})

@@ -39,6 +39,19 @@ polymarket_credentials.json
 *.keystore
 ShadowMode.txt
 
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+*.pkl
+*.joblib
+
+# Data artifacts (large files)
+*.parquet
+python/data/
+
 # Temporary / build
 tmp/
 *.log

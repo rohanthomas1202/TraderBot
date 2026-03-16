@@ -1,0 +1,48 @@
+{
+  "summary": {
+    "unique_contracts": 385,
+    "active_contracts": 385,
+    "total_snapshots": 764,
+    "days_of_data": 0,
+    "date_range": "2026-03-16 17:46:24.009508+00:00 to 2026-03-16 19:07:52.153657+00:00"
+  },
+  "depth_contracts": {
+    "median": 335.0,
+    "mean": 727.1819371727748,
+    "p10": 33.599999999999994,
+    "p25": 100.0,
+    "p75": 931.75,
+    "p90": 2000.0
+  },
+  "depth_dollars": {
+    "median": 96.15,
+    "mean": 393.33270942408376,
+    "p10": 7.553,
+    "p90": 1703.2690000000002
+  },
+  "spread": {
+    "median": 0.15000000000000002,
+    "mean": 0.213627254509018,
+    "p10": 0.08999999999999998,
+    "p25": 0.12,
+    "p75": 0.21000000000000002,
+    "p90": 0.37199999999999994
+  },
+  "volume": {
+    "mean_per_contract": NaN,
+    "median_per_contract": NaN,
+    "total_daily": 0.0
+  },
+  "go_no_go": {
+    "active_contracts_pass": true,
+    "active_contracts_value": 385,
+    "active_contracts_threshold": 20,
+    "depth_pass": false,
+    "depth_value": 96.15,
+    "depth_threshold": 100,
+    "spread_pass": false,
+    "spread_value": 0.15000000000000002,
+    "spread_threshold": 0.05,
+    "verdict": "NO-GO"
+  }
+}
